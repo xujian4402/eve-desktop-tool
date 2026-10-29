@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  ChevronRight,
   Folder,
-  FolderOpen,
-  Package,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
@@ -47,8 +45,6 @@ const MARKET_GROUP_KEY = ["market-groups"] as const;
 const TYPE_NAME_KEY = ["type-names"] as const;
 const STRUCTURES_KEY = ["structures", "with-market"] as const;
 
-/** 单个分组最多渲染的直属物品数，避免展开 400+ 节点卡顿 */
-const TYPES_PER_GROUP = 200;
 /** 订单表格单侧最多展示条数 */
 const ORDERS_PER_SIDE = 100;
 
@@ -66,6 +62,12 @@ type Selection =
   | { kind: "group"; id: number }
   | { kind: "type"; id: number }
   | null;
+
+/** 扁平列表中的一行：分类或具体物品 */
+type FlatRow =
+  | { kind: "group"; key: string; id: number; name: string; nameEn: string | null; typeCount: number; depth: number }
+  | { kind: "type"; key: string; id: number; name: string; depth: number };
+
 
 function parseTypes(raw: string): number[] {
   try {
@@ -104,7 +106,6 @@ export default function MarketGroupBrowser() {
   const queryClient = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [selection, setSelection] = useState<Selection>(null);
   const [structureId, setStructureId] = useState<number | null>(null);
   /** 左栏宽度（可拖动分隔条调整） */
@@ -153,7 +154,7 @@ export default function MarketGroupBrowser() {
     [groupsQuery.data],
   );
 
-  const { roots, childrenMap, byId } = useMemo(() => {
+  const { roots, childrenMap } = useMemo(() => {
     const index = new Map<number, GroupNode>();
     for (const node of nodes) index.set(node.id, node);
 
@@ -176,31 +177,8 @@ export default function MarketGroupBrowser() {
     rootList.sort(sortByName);
     for (const list of children.values()) list.sort(sortByName);
 
-    return { roots: rootList, childrenMap: children, byId: index };
+    return { roots: rootList, childrenMap: children };
   }, [nodes]);
-
-  // 搜索时自动展开命中节点的所有祖先
-  useEffect(() => {
-    const kw = keyword.trim().toLowerCase();
-    if (!kw) return;
-
-    const toExpand = new Set<number>();
-    for (const node of nodes) {
-      if (!node.name.toLowerCase().includes(kw)) continue;
-
-      let current: GroupNode | undefined = node;
-      let depth = 0;
-      while (current?.parentId != null && depth < 32) {
-        toExpand.add(current.parentId);
-        current = byId.get(current.parentId);
-        depth += 1;
-      }
-    }
-
-    if (toExpand.size > 0) {
-      setExpanded((prev) => new Set([...prev, ...toExpand]));
-    }
-  }, [keyword, nodes, byId]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -245,28 +223,188 @@ export default function MarketGroupBrowser() {
     document.addEventListener("mouseup", onUp);
   };
 
-  const toggle = (id: number) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  /** 全量扁平列表：分类之后紧跟它的直属物品，深度优先铺开 */
+  const flatRows = useMemo<FlatRow[]>(() => {
+    const rows: FlatRow[] = [];
+
+    const walk = (list: GroupNode[], depth: number) => {
+      for (const node of list) {
+        rows.push({
+          kind: "group",
+          key: `g-${node.id}`,
+          id: node.id,
+          name: node.name,
+          nameEn: node.nameEn,
+          typeCount: node.types.length,
+          depth,
+        });
+
+        walk(childrenMap.get(node.id) ?? [], depth + 1);
+
+        for (const typeId of node.types) {
+          rows.push({
+            kind: "type",
+            key: `t-${typeId}`,
+            id: typeId,
+            name: typeNames[typeId] ?? `#${typeId}`,
+            depth: depth + 1,
+          });
+        }
+      }
+    };
+
+    walk(roots, 0);
+    return rows;
+  }, [roots, childrenMap, typeNames]);
+
+  /** 搜索：分类名或物品名命中 */
+  const filteredRows = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) return flatRows;
+
+    return flatRows.filter((row) =>
+      row.name.toLowerCase().includes(kw),
+    );
+  }, [flatRows, keyword]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
+  const virtualizer = useVirtualizer({
+    count: filteredRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 32,
+    overscan: 12,
+  });
+
+  const focusIndex = (index: number) => {
+    if (index < 0 || index >= filteredRows.length) return;
+    setActiveIndex(index);
+    virtualizer.scrollToIndex(index, { align: "auto" });
+  };
+
+  const handleTreeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (filteredRows.length === 0) return;
+
+    const current = activeIndex ?? -1;
+
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusIndex(Math.min(current + 1, filteredRows.length - 1));
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusIndex(Math.max(current - 1, 0));
+        break;
+      case "PageDown":
+        event.preventDefault();
+        focusIndex(Math.min(current + 12, filteredRows.length - 1));
+        break;
+      case "PageUp":
+        event.preventDefault();
+        focusIndex(Math.max(current - 12, 0));
+        break;
+      case "Home":
+        event.preventDefault();
+        focusIndex(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusIndex(filteredRows.length - 1);
+        break;
+      case "Enter": {
+        event.preventDefault();
+        const row = current >= 0 ? filteredRows[current] : undefined;
+        if (!row) break;
+
+        setSelection(
+          row.kind === "group"
+            ? { kind: "group", id: row.id }
+            : { kind: "type", id: row.id },
+        );
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  const renderRow = (row: FlatRow, index: number) => {
+    const isActive = activeIndex === index;
+    const isSelected =
+      row.kind === "group"
+        ? selection?.kind === "group" && selection.id === row.id
+        : selection?.kind === "type" && selection.id === row.id;
+
+    return (
+      <div
+        role="option"
+        aria-selected={isSelected}
+        tabIndex={isActive ? 0 : -1}
+        onFocus={() => setActiveIndex(index)}
+        onClick={() =>
+          setSelection(
+            row.kind === "group"
+              ? { kind: "group", id: row.id }
+              : { kind: "type", id: row.id },
+          )
+        }
+        title={
+          row.kind === "group" && row.nameEn && row.nameEn !== row.name
+            ? `${row.name} / ${row.nameEn}`
+            : row.name
+        }
+        className={cn(
+          "relative flex h-8 cursor-pointer items-center gap-1.5 rounded-sm pr-2 outline-none transition-colors",
+          isSelected
+            ? "bg-cyan-400/10 text-white"
+            : row.kind === "group"
+              ? "text-[#b6cde2] hover:bg-white/[0.04]"
+              : "text-[#8aa7bf] hover:bg-white/[0.04] hover:text-[#c4d8e8]",
+        )}
+        style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
+      >
+        {isSelected && (
+          <span className="absolute inset-y-1 left-0 w-[2px] rounded-full bg-cyan-400" />
+        )}
+
+        {row.kind === "group" ? (
+          <>
+            <Folder className="size-3.5 shrink-0 text-cyan-400/60" />
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-[13px]",
+                isSelected && "font-medium",
+              )}
+            >
+              {row.name}
+            </span>
+            {row.nameEn && row.nameEn !== row.name && (
+              <span className="hidden max-w-28 min-w-0 truncate text-[10px] text-[#5b7c99] xl:inline">
+                {row.nameEn}
+              </span>
+            )}
+            {row.typeCount > 0 && (
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-[#5b7c99]">
+                {row.typeCount}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="min-w-0 flex-1 truncate text-[12px]">{row.name}</span>
+            <span className="shrink-0 font-mono text-[10px] tabular-nums text-[#5b7c99]">
+              {row.id}
+            </span>
+          </>
+        )}
+      </div>
+    );
   };
 
   const selectedTypeId = selection?.kind === "type" ? selection.id : null;
 
-  // 点击分组：展开它，并直接展示第一个直属物品的订单，少一次点击
-  const handleSelectGroup = (id: number) => {
-    const group = byId.get(id);
-    setExpanded((prev) => new Set(prev).add(id));
-
-    if (group && group.types.length > 0) {
-      setSelection({ kind: "type", id: group.types[0] });
-    } else {
-      setSelection({ kind: "group", id });
-    }
-  };
   const totalGroups = nodes.length;
 
   if (groupsQuery.isPending) {
@@ -304,7 +442,7 @@ export default function MarketGroupBrowser() {
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <select
-          className="h-9 max-w-56 rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          className="h-9 max-w-56 rounded-md border border-cyan-500/25 bg-[#0a1118]/80 px-2 text-sm text-cyan-50/90 outline-none focus:border-cyan-400/50"
           value={structureId ?? ""}
           onChange={(event) =>
             setStructureId(Number(event.target.value) || null)
@@ -350,17 +488,19 @@ export default function MarketGroupBrowser() {
         ) : (
           <>
           <div
-            className="flex h-[460px] w-full shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card/40 md:w-[var(--left-w)]"
+            className="flex h-[460px] w-full shrink-0 flex-col overflow-hidden rounded-md border border-cyan-500/20 bg-[#0a1118]/85 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)] md:w-[var(--left-w)]"
             style={{ "--left-w": `${leftWidth}px` } as React.CSSProperties}
           >
-            <div className="flex items-center justify-between border-b border-border px-3 py-2">
-              <span className="text-xs font-medium text-foreground/85">分类树</span>
-              <span className="text-[11px] text-muted-foreground">
-                {totalGroups.toLocaleString()} 个分组 · 可展开
+            <div className="flex items-center justify-between border-b border-cyan-500/15 px-3 py-2.5">
+              <span className="text-[11px] font-medium tracking-wide text-cyan-200/85">
+                分类树
+              </span>
+              <span className="font-mono text-[10px] text-[#5b7c99]">
+                {totalGroups.toLocaleString()} 分组
               </span>
             </div>
 
-            <div className="flex items-center gap-1 border-b border-border p-2">
+            <div className="flex items-center gap-1 border-b border-cyan-500/10 p-2">
               <div className="relative min-w-0 flex-1">
                 <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -381,25 +521,48 @@ export default function MarketGroupBrowser() {
               </button>
             </div>
 
-            <ScrollArea className="min-h-0 flex-1">
-              <ul className="p-2">
-                {roots.map((node) => (
-                  <TreeNode
-                    key={node.id}
-                    node={node}
-                    depth={0}
-                    childrenMap={childrenMap}
-                    expanded={expanded}
-                    onToggle={toggle}
-                    selection={selection}
-                    onSelectGroup={handleSelectGroup}
-                    onSelectType={(id) => setSelection({ kind: "type", id })}
-                    typeNames={typeNames}
-                    keyword={keyword.trim().toLowerCase()}
-                  />
-                ))}
-              </ul>
-            </ScrollArea>
+            <div
+              ref={scrollRef}
+              role="listbox"
+              aria-label="物品分类与物品列表"
+              onKeyDown={handleTreeKeyDown}
+              className="min-h-0 flex-1 overflow-y-auto p-1"
+            >
+              {filteredRows.length === 0 ? (
+                <p className="px-3 py-6 text-center text-[11px] text-[#5b7c99]">
+                  没有匹配的分类或物品
+                </p>
+              ) : (
+                <div
+                  style={{
+                    height: virtualizer.getTotalSize(),
+                    position: "relative",
+                    width: "100%",
+                  }}
+                >
+                  {virtualizer.getVirtualItems().map((item) => {
+                    const row = filteredRows[item.index];
+                    if (!row) return null;
+
+                    return (
+                      <div
+                        key={row.key}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: item.size,
+                          transform: `translateY(${item.start}px)`,
+                        }}
+                      >
+                        {renderRow(row, item.index)}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           <div
@@ -415,17 +578,17 @@ export default function MarketGroupBrowser() {
         <ScrollArea
           // 切换物品时重建滚动容器，避免停留在上一次的滚动位置
           key={`${structureId ?? 0}-${selectedTypeId ?? "none"}`}
-          className="h-[460px] min-w-0 flex-1 rounded-lg border border-border bg-card/40 p-4"
+          className="h-[460px] min-w-0 flex-1 rounded-md border border-cyan-500/20 bg-[#0a1118]/85 p-4 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)]"
         >
           {selectedTypeId === null ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
               <p className="text-sm text-muted-foreground">
                 {selection?.kind === "group"
-                  ? "该分类没有直属物品，请展开子分类后选择"
+                  ? "这是分类，不是具体物品"
                   : "在左侧选择具体物品，查看出售与收购订单"}
               </p>
               <p className="text-xs text-muted-foreground/70">
-                点击分类会自动展示它第一个物品的订单
+                左侧列表中缩进的条目就是物品，点击即可查看订单
               </p>
             </div>
           ) : (
@@ -493,8 +656,8 @@ function TypeOrders({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h3 className="text-sm font-medium">{typeName}</h3>
-        <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+        <h3 className="text-sm font-medium tracking-wide text-cyan-50">{typeName}</h3>
+        <p className="mt-0.5 font-mono text-[11px] text-cyan-300/50">
           type_id {typeId} · 卖单 {sells.length} · 买单 {buys.length}
         </p>
       </div>
@@ -551,9 +714,11 @@ function OrderTable({
       ? [...orders].sort((a, b) => a.price - b.price)
       : [...orders].sort((a, b) => b.price - a.price);
 
+  const priceColor = tone === "sell" ? "text-amber-300/90" : "text-emerald-300/90";
+
   return (
     <section>
-      <div className="mb-1.5 flex items-center gap-2">
+      <div className="mb-1.5 flex items-center gap-2 border-b border-cyan-500/10 pb-1.5">
         <span
           className={cn(
             "size-2 rounded-full",
@@ -586,7 +751,7 @@ function OrderTable({
           <TableBody>
             {sorted.slice(0, ORDERS_PER_SIDE).map((order) => (
               <TableRow key={order.order_id}>
-                <TableCell className="text-right tabular-nums">
+                <TableCell className={`text-right font-mono tabular-nums ${priceColor}`}>
                   {formatIsk(order.price)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
@@ -605,168 +770,5 @@ function OrderTable({
         </Table>
       )}
     </section>
-  );
-}
-
-interface TreeNodeProps {
-  node: GroupNode;
-  depth: number;
-  childrenMap: Map<number, GroupNode[]>;
-  expanded: Set<number>;
-  onToggle: (id: number) => void;
-  selection: Selection;
-  onSelectGroup: (id: number) => void;
-  onSelectType: (id: number) => void;
-  typeNames: Record<number, string>;
-  keyword: string;
-}
-
-function TreeNode({
-  node,
-  depth,
-  childrenMap,
-  expanded,
-  onToggle,
-  selection,
-  onSelectGroup,
-  onSelectType,
-  typeNames,
-  keyword,
-}: TreeNodeProps) {
-  const children = childrenMap.get(node.id) ?? [];
-  const hasChildren = children.length > 0 || node.types.length > 0;
-  const isOpen = expanded.has(node.id);
-  const isSelected = selection?.kind === "group" && selection.id === node.id;
-  const matched = keyword.length > 0 && node.name.toLowerCase().includes(keyword);
-
-  const visibleTypes = node.types.slice(0, TYPES_PER_GROUP);
-
-  return (
-    <li>
-      <div
-        className={cn(
-          "flex items-center gap-2 overflow-hidden rounded px-2 py-2 text-sm transition-colors",
-          isSelected ? "bg-accent/70" : "hover:bg-accent/30",
-        )}
-        style={{ paddingLeft: depth * 20 + 8 }}
-        onDoubleClick={() => {
-          if (hasChildren) onToggle(node.id);
-        }}
-        title={hasChildren ? "双击展开 / 折叠" : undefined}
-      >
-        <button
-          type="button"
-          className="flex size-4 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => {
-            if (hasChildren) onToggle(node.id);
-          }}
-          onDoubleClick={(event) => event.stopPropagation()}
-          aria-label={isOpen ? "折叠" : "展开"}
-        >
-          <ChevronRight
-            className={cn(
-              "size-3.5 transition-transform",
-              isOpen && "rotate-90",
-              !hasChildren && "opacity-0",
-            )}
-          />
-        </button>
-
-        {isOpen ? (
-          <FolderOpen className="size-4 shrink-0 text-cyan-400/80" />
-        ) : (
-          <Folder className="size-4 shrink-0 text-cyan-400/80" />
-        )}
-
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
-          onClick={() => onSelectGroup(node.id)}
-        >
-          <span
-            className={cn(
-              "shrink-0 transition-colors",
-              isSelected ? "font-medium text-foreground" : "text-foreground/85",
-              matched && "text-primary",
-            )}
-          >
-            {node.name}
-          </span>
-          {node.nameEn && node.nameEn !== node.name && (
-            <span className="min-w-0 truncate text-[11px] text-muted-foreground/70">
-              {node.nameEn}
-            </span>
-          )}
-        </button>
-
-        {node.types.length > 0 && (
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">
-            {node.types.length}
-          </span>
-        )}
-      </div>
-
-      {hasChildren && isOpen && (
-        <ul>
-          {children.map((child) => (
-            <TreeNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              childrenMap={childrenMap}
-              expanded={expanded}
-              onToggle={onToggle}
-              selection={selection}
-              onSelectGroup={onSelectGroup}
-              onSelectType={onSelectType}
-              typeNames={typeNames}
-              keyword={keyword}
-            />
-          ))}
-
-          {visibleTypes.map((typeId) => {
-            const active = selection?.kind === "type" && selection.id === typeId;
-
-            return (
-              <li key={`type-${typeId}`}>
-                <div
-                  className={cn(
-                    "flex items-center gap-2 overflow-hidden rounded px-2 py-1.5 text-sm transition-colors",
-                    active ? "bg-accent/70" : "hover:bg-accent/30",
-                  )}
-                  style={{ paddingLeft: (depth + 1) * 20 + 10 }}
-                >
-                  <Package className="size-3.5 shrink-0 text-muted-foreground/60" />
-                  <button
-                    type="button"
-                    className={cn(
-                      "min-w-0 flex-1 truncate text-left transition-colors",
-                      active
-                        ? "font-medium text-foreground"
-                        : "text-foreground/80",
-                    )}
-                    onClick={() => onSelectType(typeId)}
-                  >
-                    {typeNames[typeId] ?? `#${typeId}`}
-                  </button>
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
-                    {typeId}
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-
-          {node.types.length > TYPES_PER_GROUP && (
-            <li
-              className="px-1 py-0.5 text-[11px] text-muted-foreground/70"
-              style={{ paddingLeft: (depth + 1) * 20 + 6 }}
-            >
-              还有 {node.types.length - TYPES_PER_GROUP} 个物品未显示
-            </li>
-          )}
-        </ul>
-      )}
-    </li>
   );
 }

@@ -280,7 +280,7 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
 
   if (characters.length === 0) {
     return (
-      <div className="mx-auto w-full max-w-[1080px]">
+      <div className="mx-auto w-full max-w-[1400px]">
         <Empty>
           <EmptyHeader>
             <EmptyTitle>需要先授权 EVE 角色</EmptyTitle>
@@ -298,7 +298,7 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1080px]">
+    <div className="mx-auto w-full max-w-[1400px]">
       {actionError && (
         <Alert variant="destructive" className="mb-4">
           <AlertTitle>操作失败</AlertTitle>
