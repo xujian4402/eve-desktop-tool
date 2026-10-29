@@ -1255,3 +1255,115 @@ pub async fn seed_market_groups(
         generated_at: payload.generated_at,
     })
 }
+
+/* ============================================================
+   星域订单（Jita 等 NPC 贸易枢纽）
+   ============================================================ */
+
+/// 单个物品在星域内的订单分页上限（一般 2~5 页就够）
+const MAX_REGION_ORDER_PAGES: usize = 20;
+
+#[derive(Debug, Deserialize)]
+struct EsiRegionOrder {
+    order_id: i64,
+    #[serde(default)]
+    is_buy_order: bool,
+    price: f64,
+    volume_remain: i64,
+    volume_total: i64,
+    #[serde(default)]
+    min_volume: i64,
+    #[serde(default)]
+    range: String,
+    #[serde(default)]
+    issued: String,
+    #[serde(default)]
+    location_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegionOrder {
+    pub order_id: i64,
+    pub is_buy_order: bool,
+    pub price: f64,
+    pub volume_remain: i64,
+    pub volume_total: i64,
+    pub min_volume: i64,
+    pub range: String,
+    /// 原始 ISO 时间，由前端解析成本地时间
+    pub issued: String,
+    pub location_id: i64,
+}
+
+/// 拉取某星域中某个物品的全部订单。公开接口，不需要角色授权。
+///
+/// 星域全量订单有几十万条，按 type_id 过滤后通常只有几十到几千条，
+/// 因此这里只按需拉单个物品，不做全量镜像。
+#[tauri::command]
+pub async fn fetch_region_type_orders(
+    region_id: i64,
+    type_id: i64,
+) -> Result<Vec<RegionOrder>, String> {
+    let mut all: Vec<RegionOrder> = Vec::new();
+    let mut page = 1usize;
+
+    loop {
+        if page > MAX_REGION_ORDER_PAGES {
+            break;
+        }
+
+        let response = http()
+            .get(format!("{ESI_BASE}/markets/{region_id}/orders/"))
+            .query(&[
+                ("datasource", "tranquility"),
+                ("type_id", &type_id.to_string()),
+                ("order_type", "all"),
+                ("page", &page.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("拉取星域订单失败：{e}"))?;
+
+        let status = response.status().as_u16();
+        if status == 420 || status == 429 {
+            return Err(format!("拉取星域订单：{RATE_LIMIT_HINT}"));
+        }
+        if status != 200 {
+            return Err(format!("拉取星域订单失败（HTTP {status}）"));
+        }
+
+        let total_pages = response
+            .headers()
+            .get("x-pages")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1);
+
+        let rows = response
+            .json::<Vec<EsiRegionOrder>>()
+            .await
+            .map_err(|e| format!("解析星域订单失败（第 {page} 页）：{e}"))?;
+
+        for row in rows {
+            all.push(RegionOrder {
+                order_id: row.order_id,
+                is_buy_order: row.is_buy_order,
+                price: row.price,
+                volume_remain: row.volume_remain,
+                volume_total: row.volume_total,
+                min_volume: row.min_volume,
+                range: row.range,
+                issued: row.issued,
+                location_id: row.location_id,
+            });
+        }
+
+        if page >= total_pages {
+            break;
+        }
+        page += 1;
+    }
+
+    Ok(all)
+}

@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "eve-desktop-tool",
-        "width": 800,
-        "height": 600,
-        "minWidth": 720,
-        "minHeight": 520,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
         "theme": "Dark",
         "center": true
       }

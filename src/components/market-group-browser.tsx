@@ -21,16 +21,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 import {
@@ -48,8 +39,22 @@ const MARKET_GROUP_KEY = ["market-groups"] as const;
 const TYPE_NAME_KEY = ["type-names"] as const;
 const STRUCTURES_KEY = ["structures", "with-market"] as const;
 
-/** 订单表格单侧最多展示条数 */
-const ORDERS_PER_SIDE = 100;
+/** 吉他所在星域 The Forge */
+const JITA_REGION_ID = 10000002;
+const JITA_KEY = "jita";
+
+/** ESI 星域订单（Rust fetch_region_type_orders 的返回） */
+interface RegionOrder {
+  orderId: number;
+  isBuyOrder: boolean;
+  price: number;
+  volumeRemain: number;
+  volumeTotal: number;
+  minVolume: number;
+  range: string;
+  issued: string;
+  locationId: number;
+}
 
 /**
  * 是否在工具栏展示「从 ESI 更新分类」。
@@ -111,6 +116,20 @@ function toNode(row: MarketGroupRow): GroupNode {
   };
 }
 
+/** ESI 订单范围 → 中文说明。数字表示以挂单点为中心的跳跃数 */
+function formatOrderRange(range: string): string {
+  switch (range) {
+    case "station":
+      return "本空间站";
+    case "solar_system":
+      return "本星系";
+    case "region":
+      return "本星域";
+    default:
+      return /^\d+$/.test(range) ? `${range} 跳` : range;
+  }
+}
+
 function formatIsk(value: number): string {
   return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
@@ -134,7 +153,8 @@ export default function MarketGroupBrowser({
   const [syncing, setSyncing] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [selection, setSelection] = useState<Selection>(null);
-  const [structureId, setStructureId] = useState<number | null>(null);
+  /** 当前市场：jita 或某个建筑的 ID（字符串形式） */
+  const [marketKey, setMarketKey] = useState<string>(JITA_KEY);
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   /** 左栏宽度（可拖动分隔条调整） */
   const [leftWidth, setLeftWidth] = useState(240);
@@ -169,12 +189,14 @@ export default function MarketGroupBrowser({
 
   const typeNames = typeNamesQuery.data ?? {};
   const structures = structuresQuery.data ?? [];
+  const isJita = marketKey === JITA_KEY;
+  const structureId = isJita ? null : Number(marketKey) || null;
 
   /** 该建筑内有订单的物品 */
   const marketTypesQuery = useQuery({
     queryKey: ["structure-type-ids", structureId],
     queryFn: () => listStructureTypeIds(structureId as number),
-    enabled: structureId !== null && filterMode === "market",
+    enabled: !isJita && structureId !== null && filterMode === "market",
     staleTime: 30_000,
   });
 
@@ -197,12 +219,12 @@ export default function MarketGroupBrowser({
     return null;
   }, [filterMode, marketTypesQuery.data, myTypesQuery.data]);
 
-  // 默认选中第一个已录入的建筑
+  // 选中的建筑被删除时回落到 Jita
   useEffect(() => {
-    if (structureId !== null) return;
-    if (structures.length === 0) return;
-    setStructureId(structures[0].structure_id);
-  }, [structures, structureId]);
+    if (marketKey === JITA_KEY) return;
+    if (structures.some((item) => String(item.structure_id) === marketKey)) return;
+    setMarketKey(JITA_KEY);
+  }, [structures, marketKey]);
 
   const nodes = useMemo<GroupNode[]>(
     () => (groupsQuery.data ?? []).map(toNode),
@@ -592,20 +614,15 @@ export default function MarketGroupBrowser({
       <div className="flex flex-wrap items-center gap-2">
         <select
           className="h-9 max-w-56 rounded-md border border-cyan-500/25 bg-[#0a1118]/80 px-2 text-sm text-cyan-50/90 outline-none focus:border-cyan-400/50"
-          value={structureId ?? ""}
-          onChange={(event) =>
-            setStructureId(Number(event.target.value) || null)
-          }
+          value={marketKey}
+          onChange={(event) => setMarketKey(event.target.value)}
         >
-          {structures.length === 0 ? (
-            <option value="">没有可用建筑</option>
-          ) : (
-            structures.map((item) => (
-              <option key={item.structure_id} value={item.structure_id}>
-                {item.name ?? `#${item.structure_id}`}
-              </option>
-            ))
-          )}
+          <option value={JITA_KEY}>Jita 市场（The Forge）</option>
+          {structures.map((item) => (
+            <option key={item.structure_id} value={String(item.structure_id)}>
+              {item.name ?? `#${item.structure_id}`}
+            </option>
+          ))}
         </select>
 
         <div className="flex items-center gap-0.5 rounded-md border border-cyan-500/20 bg-[#0a1118]/60 p-0.5">
@@ -619,12 +636,22 @@ export default function MarketGroupBrowser({
             <button
               key={item.key}
               type="button"
+              // Jita 是实时接口，本地没有「该建筑全部订单」的快照，无从筛选
+              disabled={isJita && item.key !== "all"}
+              title={
+                isJita && item.key !== "all"
+                  ? "Jita 市场走实时接口，只能按物品查询，无法按订单数据筛选"
+                  : undefined
+              }
               onClick={() => setFilterMode(item.key)}
               className={cn(
                 "rounded px-2 py-1 text-[11px] transition-colors",
                 filterMode === item.key
                   ? "bg-cyan-400/15 text-cyan-100"
                   : "text-muted-foreground hover:text-foreground",
+                isJita &&
+                  item.key !== "all" &&
+                  "cursor-not-allowed opacity-40 hover:text-muted-foreground",
               )}
             >
               {item.label}
@@ -770,10 +797,10 @@ export default function MarketGroupBrowser({
           </>
         )}
 
-        <ScrollArea
-          // 切换物品时重建滚动容器，避免停留在上一次的滚动位置
-          key={`${structureId ?? 0}-${selectedTypeId ?? "none"}`}
-          className="h-[360px] min-h-0 min-w-0 flex-1 rounded-md md:h-full border border-cyan-500/20 bg-[#0a1118]/85 p-4 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)]"
+        <div
+          // 切换物品时重建容器，避免停留在上一次的滚动位置
+          key={`${marketKey}-${selectedTypeId ?? "none"}`}
+          className="flex h-[360px] min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-cyan-500/20 bg-[#0a1118]/85 p-4 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)] md:h-full"
         >
           {selectedTypeId === null ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
@@ -788,13 +815,12 @@ export default function MarketGroupBrowser({
             </div>
           ) : (
             <TypeOrders
-              structureId={structureId}
+              marketKey={marketKey}
               typeId={selectedTypeId}
               typeName={typeNames[selectedTypeId] ?? `#${selectedTypeId}`}
-              hasStructure={structures.length > 0}
             />
           )}
-        </ScrollArea>
+        </div>
       </div>
     </div>
   );
@@ -802,45 +828,55 @@ export default function MarketGroupBrowser({
 
 /** 物品的卖单（上）与买单（下） */
 function TypeOrders({
-  structureId,
+  marketKey,
   typeId,
   typeName,
-  hasStructure,
 }: {
-  structureId: number | null;
+  marketKey: string;
   typeId: number;
   typeName: string;
-  hasStructure: boolean;
 }) {
-  const query = useQuery({
+  const isJita = marketKey === JITA_KEY;
+  const structureId = isJita ? null : Number(marketKey) || null;
+
+  /** 已录入建筑的订单来自本地快照 */
+  const localQuery = useQuery({
     queryKey: ["type-orders", structureId, typeId],
     queryFn: () => listTypeOrders(structureId as number, typeId),
-    enabled: structureId !== null,
+    enabled: !isJita && structureId !== null,
     staleTime: 30_000,
   });
 
-  if (!hasStructure) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>还没有可查询的建筑</EmptyTitle>
-          <EmptyDescription>
-            到「同步市场订单」标签页录入建筑并同步一次订单。
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
+  /** Jita 走 ESI 实时接口，按物品查询（公开数据，无需授权） */
+  const jitaQuery = useQuery({
+    queryKey: ["jita-orders", typeId],
+    queryFn: () =>
+      invoke<RegionOrder[]>("fetch_region_type_orders", {
+        regionId: JITA_REGION_ID,
+        typeId,
+      }),
+    enabled: isJita,
+    staleTime: 60_000,
+  });
 
-  if (structureId === null || query.isPending) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner /> 正在读取订单…
-      </div>
-    );
-  }
+  const activeQuery = isJita ? jitaQuery : localQuery;
 
-  const rows = query.data ?? [];
+  const rows = useMemo(() => {
+    if (isJita) {
+      return (jitaQuery.data ?? []).map((order) => ({
+        order_id: order.orderId,
+        is_buy_order: order.isBuyOrder ? 1 : 0,
+        price: order.price,
+        volume_remain: order.volumeRemain,
+        volume_total: order.volumeTotal,
+        min_volume: order.minVolume,
+        range: order.range,
+        issued_at: Date.parse(order.issued) || 0,
+      }));
+    }
+    return localQuery.data ?? [];
+  }, [isJita, jitaQuery.data, localQuery.data]);
+
   const sells = rows
     .filter((row) => row.is_buy_order === 0)
     .sort((a, b) => a.price - b.price);
@@ -848,21 +884,53 @@ function TypeOrders({
     .filter((row) => row.is_buy_order === 1)
     .sort((a, b) => b.price - a.price);
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h3 className="text-sm font-medium tracking-wide text-cyan-50">{typeName}</h3>
-        <p className="mt-0.5 font-mono text-[11px] text-cyan-300/50">
-          type_id {typeId} · 卖单 {sells.length} · 买单 {buys.length}
+  if (activeQuery.isPending) {
+    return (
+      <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        {isJita ? "正在从 ESI 拉取 Jita 订单…" : "正在读取订单…"}
+      </div>
+    );
+  }
+
+  if (activeQuery.isError) {
+    return (
+      <div className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium tracking-wide text-cyan-50">
+          {typeName}
+        </h3>
+        <p className="text-xs text-destructive">
+          获取订单失败：
+          {activeQuery.error instanceof Error
+            ? activeQuery.error.message
+            : String(activeQuery.error)}
         </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <h3 className="text-sm font-medium tracking-wide text-cyan-50">
+          {typeName}
+        </h3>
+        <span className="font-mono text-[11px] text-cyan-300/50">
+          {isJita ? "Jita · The Forge · ESI 实时" : "本地建筑快照"} · 卖单{" "}
+          {sells.length} · 买单 {buys.length}
+        </span>
       </div>
 
       {rows.length === 0 ? (
-        <Empty>
+        <Empty className="min-h-0 flex-1">
           <EmptyHeader>
-            <EmptyTitle>该建筑没有这个物品的订单</EmptyTitle>
+            <EmptyTitle>
+              {isJita ? "Jita 没有这个物品的订单" : "该建筑没有这个物品的订单"}
+            </EmptyTitle>
             <EmptyDescription>
-              可能确实无人挂单，也可能尚未同步该建筑的订单。到「同步市场订单」标签页点「同步」后再看。
+              {isJita
+                ? "该物品在 The Forge 星域当前无人挂单，换个物品试试。"
+                : "可能确实无人挂单，也可能尚未同步该建筑的订单。到「同步市场订单」标签页点「同步」后再看。"}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -904,65 +972,83 @@ function OrderTable({
   }[];
   emptyText: string;
 }) {
-  const sorted =
-    tone === "sell"
-      ? [...orders].sort((a, b) => a.price - b.price)
-      : [...orders].sort((a, b) => b.price - a.price);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const priceColor = tone === "sell" ? "text-amber-300/90" : "text-emerald-300/90";
+  const sorted = useMemo(
+    () =>
+      tone === "sell"
+        ? [...orders].sort((a, b) => a.price - b.price)
+        : [...orders].sort((a, b) => b.price - a.price),
+    [orders, tone],
+  );
+
+  const virtualizer = useVirtualizer({
+    count: sorted.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 30,
+    overscan: 8,
+  });
+
+  const priceColor =
+    tone === "sell" ? "text-amber-300/90" : "text-emerald-300/90";
+  const dotColor = tone === "sell" ? "bg-amber-400" : "bg-emerald-400";
 
   return (
-    <section>
-      <div className="mb-1.5 flex items-center gap-2 border-b border-cyan-500/10 pb-1.5">
-        <span
-          className={cn(
-            "size-2 rounded-full",
-            tone === "sell" ? "bg-amber-400" : "bg-emerald-400",
-          )}
-        />
+    <section className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-1 flex shrink-0 items-center gap-2 border-b border-cyan-500/10 pb-1">
+        <span className={cn("size-2 rounded-full", dotColor)} />
         <h4 className="text-xs font-medium">{title}</h4>
         <Badge variant="outline" className="tabular-nums text-[11px]">
-          {orders.length}
+          {sorted.length}
         </Badge>
-        {orders.length > ORDERS_PER_SIDE && (
-          <span className="text-[11px] text-muted-foreground">
-            仅显示前 {ORDERS_PER_SIDE} 条
-          </span>
-        )}
       </div>
 
-      {orders.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{emptyText}</p>
+      <div className="grid shrink-0 grid-cols-[1fr_1.15fr_0.7fr_0.8fr] gap-2 border-b border-cyan-500/10 px-1 py-1 text-[10px] text-muted-foreground">
+        <span>价格 (ISK)</span>
+        <span>剩余 / 总量</span>
+        <span>最小量</span>
+        <span>范围</span>
+      </div>
+
+      {sorted.length === 0 ? (
+        <p className="px-1 py-2 text-xs text-muted-foreground">{emptyText}</p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="text-right">价格 (ISK)</TableHead>
-              <TableHead className="text-right">剩余 / 总量</TableHead>
-              <TableHead className="text-right">最小量</TableHead>
-              <TableHead>范围</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sorted.slice(0, ORDERS_PER_SIDE).map((order) => (
-              <TableRow key={order.order_id}>
-                <TableCell className={`text-right font-mono tabular-nums ${priceColor}`}>
-                  {formatIsk(order.price)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {order.volume_remain.toLocaleString()} /{" "}
-                  {order.volume_total.toLocaleString()}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {order.min_volume.toLocaleString()}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {order.range}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((item) => {
+              const order = sorted[item.index];
+              if (!order) return null;
+
+              return (
+                <div
+                  key={order.order_id}
+                  className="absolute inset-x-0 grid grid-cols-[1fr_1.15fr_0.7fr_0.8fr] items-center gap-2 px-1 text-[11px]"
+                  style={{
+                    height: item.size,
+                    transform: `translateY(${item.start}px)`,
+                  }}
+                >
+                  <span className={cn("font-mono tabular-nums", priceColor)}>
+                    {formatIsk(order.price)}
+                  </span>
+                  <span className="font-mono tabular-nums text-foreground/75">
+                    {order.volume_remain.toLocaleString()} /{" "}
+                    {order.volume_total.toLocaleString()}
+                  </span>
+                  <span className="font-mono tabular-nums text-muted-foreground">
+                    {order.min_volume.toLocaleString()}
+                  </span>
+                  <span className="truncate text-muted-foreground">
+                    {formatOrderRange(order.range)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </section>
   );
