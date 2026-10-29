@@ -1,0 +1,60 @@
+[package]
+name = "eve-desktop-tool"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "eve_desktop_tool_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+# Windows 上用户容易重复双击启动,单实例可避免端口/数据库/keyring 并发冲突
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# EVE SSO(PKCE)+ ESI 调用
+# 用 native-tls 而非 rustls:Windows 走 SChannel、macOS 走 Security.framework,
+# 系统自带 TLS 实现,避免 rustls(aws-lc-rs) 在 Windows 上额外要求 CMake / NASM。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "native-tls",
+] }
+tokio = { version = "1", features = ["time"] }
+base64 = "0.22"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+urlencoding = "2"
+open = "5"
+
+# Rust 侧直接读写本地 SQLite（令牌落库），与前端 tauri-plugin-sql 共用同一个文件
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+# 令牌加密（AES-256-GCM），主密钥存系统凭据库
+aes-gcm = "0.10"
+# 市场分类同步需要并发请求（并发度受控，避免触发 ESI 限流）
+futures = "0.3"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

@@ -1,0 +1,65 @@
+/*
+ * 只引入 theme 与 utilities，刻意跳过 Tailwind 的 preflight。
+ * 项目已有手写的全局基础样式（src/App.css），preflight 会重置 margin/padding、
+ * 按钮与表单元素样式，进而破坏现有多页面视觉。
+ *
+ * 设计令牌与 App.css 里的深色配色保持一致，保证 shadcn 组件与既有界面同色系。
+ */
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+
+/* shadcn 组件的进出场动画（animate-in / fade-in-0 / zoom-in-95 等） */
+@import "tw-animate-css";
+
+@theme {
+  --color-background: #0b1017;
+  --color-foreground: #d7e3f4;
+
+  --color-card: #111a25;
+  --color-card-foreground: #e6f0fb;
+  --color-popover: #111a25;
+  --color-popover-foreground: #e6f0fb;
+
+  --color-primary: #4ea3ff;
+  --color-primary-foreground: #06121f;
+  --color-secondary: #1b2a3c;
+  --color-secondary-foreground: #cfe3fb;
+
+  --color-muted: #16212e;
+  --color-muted-foreground: #8ba3bf;
+  --color-accent: #16212e;
+  --color-accent-foreground: #cfe3fb;
+
+  --color-destructive: #c9707a;
+  --color-destructive-foreground: #1a0d10;
+
+  --color-border: #23324a;
+  --color-input: #2f4a6b;
+  --color-ring: #3f7fd0;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
+  /* Accordion 展开/收起的高度过渡（tw-animate-css 不含这两个） */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+}

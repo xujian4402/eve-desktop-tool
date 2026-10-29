@@ -1,0 +1,722 @@
+:root {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", Avenir, Helvetica, Arial,
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #d7e3f4;
+  background-color: #0b1017;
+
+  /* 让 Windows(WebView2) 的原生控件 —— 下拉框、滚动条 —— 跟随深色，
+     否则 select 展开后是白底黑字，与整体界面割裂 */
+  color-scheme: dark;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 滚动条：Windows 默认样式为浅色宽条，这里统一为细窄深色 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2b3d53 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #2b3d53;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #3d5975;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 顶部菜单栏 */
+.menubar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  height: 52px;
+  padding: 0 20px;
+  background-color: #111a25;
+  border-bottom: 1px solid #1f2c3d;
+  user-select: none;
+}
+
+.brand {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #6f8bab;
+  white-space: nowrap;
+}
+
+.menu {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  height: 100%;
+}
+
+.menu-item {
+  position: relative;
+  padding: 0 18px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #8ba3bf;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.18s ease, background-color 0.18s ease;
+}
+
+.menu-item:hover {
+  color: #cfe3fb;
+  background-color: #16212e;
+}
+
+.menu-item:focus-visible {
+  outline: 1px solid #3f7fd0;
+  outline-offset: -3px;
+}
+
+.menu-item.is-active {
+  color: #4ea3ff;
+  background-color: #16212e;
+}
+
+.menu-item.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background-color: #4ea3ff;
+}
+
+/* 内容区 */
+.content {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(78, 163, 255, 0.08), transparent 55%),
+    #0b1017;
+}
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 560px;
+  padding: 28px 32px;
+  border: 1px dashed #26374a;
+  border-radius: 10px;
+  background-color: rgba(17, 26, 37, 0.7);
+}
+
+.placeholder h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #e6f0fb;
+}
+
+.placeholder p {
+  margin: 0;
+  color: #8ba3bf;
+}
+
+.placeholder-tag {
+  padding: 2px 10px;
+  border: 1px solid #2c3e52;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #6f8bab;
+}
+
+/* ============================================================
+   市场页
+   ============================================================ */
+
+.market {
+  max-width: 1080px;
+}
+
+.market__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 26px;
+}
+
+.market__title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #e6f0fb;
+}
+
+.market__subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: #8ba3bf;
+}
+
+.market__actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.btn {
+  padding: 7px 14px;
+  border: 1px solid #2f4a6b;
+  border-radius: 6px;
+  background-color: #1b2a3c;
+  color: #cfe3fb;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background-color: #24374d;
+  border-color: #3f7fd0;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--ghost {
+  background-color: transparent;
+}
+
+.market-section {
+  margin-bottom: 28px;
+}
+
+.market-section__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #a9c0da;
+}
+
+.market-section__count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background-color: #1d2c3e;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  color: #6f8bab;
+}
+
+.market-empty {
+  padding: 26px 28px;
+  border: 1px dashed #26374a;
+  border-radius: 10px;
+  background-color: rgba(17, 26, 37, 0.65);
+}
+
+.market-empty h2,
+.market-empty h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #d7e3f4;
+}
+
+.market-empty p {
+  margin: 0;
+  font-size: 13px;
+  color: #7e94ae;
+}
+
+.market-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.market-table th {
+  padding: 8px 12px;
+  border-bottom: 1px solid #23324a;
+  font-weight: 500;
+  color: #6f8bab;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.market-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #1a2637;
+  color: #c4d4e6;
+}
+
+.market-table tbody tr:hover {
+  background-color: rgba(36, 55, 77, 0.35);
+}
+
+.market-table .is-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.market-table__name {
+  display: block;
+  color: #dbe8f7;
+}
+
+.market-table__id {
+  display: block;
+  font-size: 11px;
+  color: #5f748d;
+}
+
+.market-hint {
+  padding: 24px 26px;
+  border-radius: 10px;
+  background-color: rgba(17, 26, 37, 0.7);
+  border: 1px solid #23324a;
+  color: #8ba3bf;
+  font-size: 13px;
+}
+
+.select {
+  padding: 7px 10px;
+  border: 1px solid #2f4a6b;
+  border-radius: 6px;
+  background-color: #131d29;
+  color: #cfe3fb;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.select:focus {
+  outline: 1px solid #3f7fd0;
+  outline-offset: 0;
+}
+
+.market-alert {
+  margin-bottom: 20px;
+  padding: 14px 18px;
+  border: 1px solid #5a2f34;
+  border-radius: 8px;
+  background-color: rgba(46, 22, 25, 0.6);
+  font-size: 13px;
+}
+
+.market-alert strong {
+  color: #e8a0a6;
+}
+
+.market-alert p {
+  margin: 6px 0 0;
+  color: #c39ba0;
+  word-break: break-word;
+}
+
+.market-hint--error {
+  border-color: #5a2f34;
+  background-color: rgba(46, 22, 25, 0.6);
+}
+
+.market-hint--error strong {
+  color: #e8a0a6;
+}
+
+.market-hint p {
+  margin: 8px 0 0;
+}
+
+.market-hint__sub {
+  color: #6f8bab;
+}
+
+.market-hint code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: #111a25;
+  color: #9fc0e0;
+}
+
+/* ============================================================
+   个人中心 / 角色与权限
+   ============================================================ */
+
+.market-empty--action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.market-section__desc {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #7e94ae;
+}
+
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: 1px solid #23324a;
+  border-radius: 10px;
+  background-color: rgba(17, 26, 37, 0.7);
+}
+
+.account-card__avatar {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background-color: #1b2735;
+  object-fit: cover;
+}
+
+.account-card__avatar--fallback {
+  border: 1px dashed #2c3e52;
+}
+
+.account-card__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.account-card__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0ecf9;
+}
+
+.account-card__badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background-color: #1d3a5c;
+  color: #6fb3ff;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.account-card__meta {
+  font-size: 12px;
+  color: #7e94ae;
+}
+
+.account-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.btn--danger {
+  border-color: #6b3038;
+  background-color: #3a1f24;
+  color: #f0b4ba;
+}
+
+.btn--danger:hover:not(:disabled) {
+  border-color: #8b3d47;
+  background-color: #4a262c;
+}
+
+.scope-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid #1f2c3d;
+  border-radius: 8px;
+  background-color: rgba(17, 26, 37, 0.5);
+}
+
+.scope-item__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background-color: #4ea3ff;
+}
+
+.scope-item__dot.is-missing {
+  background-color: #c9707a;
+}
+
+.scope-item__code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #9fc0e0;
+}
+
+.scope-item__purpose {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #7e94ae;
+}
+
+/* ============================================================
+   市场：表单 / 订单表格
+   ============================================================ */
+
+.market-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 12px;
+  border: 1px solid #2f4a6b;
+  border-radius: 6px;
+  background-color: #131d29;
+  color: #dbe8f7;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.input::placeholder {
+  color: #5f748d;
+}
+
+.input:focus {
+  outline: 1px solid #3f7fd0;
+  outline-offset: 0;
+}
+
+.btn--sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.market-table .is-right {
+  text-align: right;
+}
+
+.market-table .is-error {
+  color: #e8a0a6;
+}
+
+.market-section__action {
+  margin-left: auto;
+}
+
+.market-notice {
+  margin-bottom: 18px;
+  padding: 10px 16px;
+  border: 1px solid #234a3a;
+  border-radius: 8px;
+  background-color: rgba(20, 45, 36, 0.55);
+  font-size: 13px;
+  color: #8fd4b0;
+}
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tag--buy {
+  background-color: rgba(38, 74, 52, 0.75);
+  color: #8ed6a8;
+}
+
+.tag--sell {
+  background-color: rgba(74, 50, 32, 0.75);
+  color: #e6bd8a;
+}
+
+.tag--muted {
+  background-color: rgba(40, 52, 68, 0.75);
+  color: #8ba3bf;
+}
+
+.scan-result {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid #1f2c3d;
+  border-radius: 10px;
+  background-color: rgba(17, 26, 37, 0.5);
+}
+
+.scan-result > .market-section__desc:first-child {
+  margin-bottom: 10px;
+}
+
+.scan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scan-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid #1a2637;
+  border-radius: 8px;
+  background-color: rgba(11, 16, 23, 0.6);
+}
+
+.scan-item__main {
+  min-width: 0;
+}
+
+/* ============================================================
+   个人中心：资产分组
+   ============================================================ */
+
+.market-hint--loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.asset-group {
+  overflow: hidden;
+  border: 1px solid #1f2c3d;
+  border-radius: 10px;
+  background-color: rgba(17, 26, 37, 0.6);
+}
+
+.asset-group__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.asset-group__summary::-webkit-details-marker {
+  display: none;
+}
+
+.asset-group__summary:hover {
+  background-color: rgba(22, 33, 46, 0.55);
+}
+
+.asset-group[open] .asset-group__summary {
+  border-bottom: 1px solid #1a2637;
+  background-color: rgba(22, 33, 46, 0.7);
+}
+
+.asset-group__main {
+  min-width: 0;
+}
+
+.asset-group__name {
+  display: block;
+  font-size: 14px;
+  color: #dbe8f7;
+}
+
+.asset-group .market-table th:first-child,
+.asset-group .market-table td:first-child {
+  padding-left: 16px;
+}
+
+.asset-item__flag {
+  margin-left: 8px;
+}
+
+.asset-item__slot {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #6f8bab;
+}
