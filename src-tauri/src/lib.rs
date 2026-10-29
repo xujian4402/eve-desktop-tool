@@ -51,6 +51,12 @@ pub fn run() {
             sql: include_str!("../migrations/0005_order_lookup_index.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "market_type",
+            sql: include_str!("../migrations/0006_market_type.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

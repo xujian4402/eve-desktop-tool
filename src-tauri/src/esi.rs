@@ -1066,7 +1066,36 @@ pub async fn sync_market_groups(
         removed = result.rows_affected() as usize;
     }
 
-    // 5. 顺带把分类里的物品名解析出来写入 eve_type，
+    // 5. 商品目录：与分类一起刷新，供「只搜商品」使用
+    let market_types: Vec<(i64, i64)> = details
+        .iter()
+        .flat_map(|group| {
+            group
+                .types
+                .iter()
+                .map(move |type_id| (*type_id, group.market_group_id))
+        })
+        .collect();
+
+    for batch in market_types.chunks(300) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "INSERT INTO market_type (type_id, market_group_id) ",
+        );
+
+        builder.push_values(batch, |mut row, (type_id, group_id)| {
+            row.push_bind(*type_id).push_bind(*group_id);
+        });
+
+        builder.push(" ON CONFLICT(type_id) DO NOTHING");
+
+        builder
+            .build()
+            .execute(pool.inner())
+            .await
+            .map_err(|e| format!("写入商品目录失败：{e}"))?;
+    }
+
+    // 6. 顺带把分类里的物品名解析出来写入 eve_type，
     //    这样分类页和订单页都能显示名称而不是裸 type_id。
     let type_ids: Vec<i64> = {
         let mut all: Vec<i64> = details
@@ -1242,6 +1271,31 @@ pub async fn seed_market_groups(
             .execute(&mut *tx)
             .await
             .map_err(|e| format!("写入物品名称失败：{e}"))?;
+    }
+
+    // 商品目录：把分组里的类型展开成关联表，供「只搜商品」使用
+    let market_types: Vec<(i64, i64)> = payload
+        .groups
+        .iter()
+        .flat_map(|group| group.types.iter().map(move |type_id| (*type_id, group.id)))
+        .collect();
+
+    for batch in market_types.chunks(300) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "INSERT INTO market_type (type_id, market_group_id) ",
+        );
+
+        builder.push_values(batch, |mut row, (type_id, group_id)| {
+            row.push_bind(*type_id).push_bind(*group_id);
+        });
+
+        builder.push(" ON CONFLICT(type_id) DO NOTHING");
+
+        builder
+            .build()
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("写入商品目录失败：{e}"))?;
     }
 
     tx.commit()

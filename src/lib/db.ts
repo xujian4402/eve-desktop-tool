@@ -696,3 +696,114 @@ export async function listCharacterOrderTypeIds(
   );
   return rows.map((row) => row.type_id);
 }
+
+/* ---------- 玩家市场对比 ---------- */
+
+/** 按名称或类型 ID 搜索物品（中文优先） */
+export async function searchTypes(
+  keyword: string,
+  limit = 20,
+): Promise<{ type_id: number; name: string }[]> {
+  const db = await getDb();
+  const raw = keyword.trim();
+  if (!raw) return [];
+
+  const like = `%${raw}%`;
+
+  // 只搜有市场分类的物品，避免出现技能书、蓝图拷贝等无法在市场挂单的条目
+  return db.select<{ type_id: number; name: string }[]>(
+    `SELECT t.type_id, COALESCE(t.name_zh, t.name_en) AS name
+       FROM eve_type t
+       JOIN market_type m ON m.type_id = t.type_id
+      WHERE t.name_zh LIKE $1
+         OR t.name_en LIKE $1
+         OR CAST(t.type_id AS TEXT) = $2
+      ORDER BY LENGTH(COALESCE(t.name_zh, t.name_en)) ASC
+      LIMIT $3`,
+    [like, raw, limit],
+  );
+}
+
+/** 单个物品在某几栋建筑里的买卖盘概况 */
+export interface StructurePriceRow {
+  structure_id: number;
+  name: string | null;
+  solar_system_name: string | null;
+  best_buy: number | null;
+  best_sell: number | null;
+  sell_volume: number;
+  buy_volume: number;
+  order_count: number;
+  last_synced_at: number | null;
+}
+
+/**
+ * 对比同一物品在多栋建筑的最优买卖价。
+ * 数据来自本地已同步的订单快照，不会触发 ESI 请求。
+ */
+export async function compareStructurePrices(
+  typeId: number,
+  structureIds: number[],
+): Promise<StructurePriceRow[]> {
+  const db = await getDb();
+  if (structureIds.length === 0) return [];
+
+  const placeholders = structureIds
+    .map((_, index) => `$${index + 2}`)
+    .join(", ");
+
+  return db.select<StructurePriceRow[]>(
+    `SELECT s.structure_id,
+            s.name,
+            s.solar_system_name,
+            s.last_synced_at,
+            MAX(CASE WHEN o.is_buy_order = 1 THEN o.price END) AS best_buy,
+            MIN(CASE WHEN o.is_buy_order = 0 THEN o.price END) AS best_sell,
+            COALESCE(SUM(CASE WHEN o.is_buy_order = 0 THEN o.volume_remain ELSE 0 END), 0) AS sell_volume,
+            COALESCE(SUM(CASE WHEN o.is_buy_order = 1 THEN o.volume_remain ELSE 0 END), 0) AS buy_volume,
+            COUNT(o.order_id) AS order_count
+       FROM market_structure s
+       LEFT JOIN market_structure_order o
+              ON o.structure_id = s.structure_id AND o.type_id = $1
+      WHERE s.structure_id IN (${placeholders})
+      GROUP BY s.structure_id, s.name, s.solar_system_name, s.last_synced_at`,
+    [typeId, ...structureIds],
+  );
+}
+
+/** 订单簿中的一个价格档位（同价订单已合并） */
+export interface OrderBookLevel {
+  structure_id: number;
+  type_id: number;
+  name: string | null;
+  is_buy_order: number;
+  price: number;
+  volume: number;
+  min_volume: number;
+}
+
+/**
+ * 取两栋建筑的全部盘口档位，供前端做逐档撮合。
+ * 同价订单在 SQL 里合并成一档，避免把上万条订单搬到内存。
+ */
+export async function listOrderBookLevels(
+  structureA: number,
+  structureB: number,
+): Promise<OrderBookLevel[]> {
+  const db = await getDb();
+
+  return db.select<OrderBookLevel[]>(
+    `SELECT o.structure_id,
+            o.type_id,
+            o.is_buy_order,
+            o.price,
+            SUM(o.volume_remain) AS volume,
+            MAX(o.min_volume) AS min_volume,
+            COALESCE(t.name_zh, t.name_en) AS name
+       FROM market_structure_order o
+       LEFT JOIN eve_type t ON t.type_id = o.type_id
+      WHERE o.structure_id IN ($1, $2) AND o.price > 0
+      GROUP BY o.structure_id, o.type_id, o.is_buy_order, o.price`,
+    [structureA, structureB],
+  );
+}

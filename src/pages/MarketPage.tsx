@@ -49,6 +49,7 @@ import {
 import BuildingIngest from "@/components/building-ingest";
 import BuildingManager from "@/components/building-manager";
 import MarketGroupBrowser from "@/components/market-group-browser";
+import StructureComparePanel from "@/components/structure-compare-panel";
 import { describeError, useCharacters } from "../hooks/useCharacters";
 import { MENU_ACCOUNT, type MenuKey } from "../lib/nav";
 import { useUiStore, type MarketTab } from "../stores/ui-store";
@@ -341,6 +342,7 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
           <TabsTrigger value="groups">交易市场</TabsTrigger>
           <TabsTrigger value="orders">我的订单</TabsTrigger>
           <TabsTrigger value="structures">同步市场订单</TabsTrigger>
+          <TabsTrigger value="compare">市场对比</TabsTrigger>
         </TabsList>
 
         <TabsContent value="structures" className="mt-4 min-h-0 flex-1 overflow-auto">
@@ -586,6 +588,10 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
           )}
         </Section>
 
+        </TabsContent>
+
+        <TabsContent value="compare" className="mt-4 min-h-0 flex-1 overflow-auto">
+          <StructureComparePanel />
         </TabsContent>
 
         <TabsContent value="groups" className="mt-4 min-h-0 flex-1">
