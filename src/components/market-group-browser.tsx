@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  ChevronRight,
   Folder,
   PanelLeftClose,
   PanelLeftOpen,
@@ -34,7 +35,9 @@ import { cn } from "@/lib/utils";
 
 import {
   getTypeNameMap,
+  listCharacterOrderTypeIds,
   listMarketGroups,
+  listStructureTypeIds,
   listStructures,
   listTypeOrders,
   type MarketGroupRow,
@@ -65,7 +68,17 @@ type Selection =
 
 /** 扁平列表中的一行：分类或具体物品 */
 type FlatRow =
-  | { kind: "group"; key: string; id: number; name: string; nameEn: string | null; typeCount: number; depth: number }
+  | {
+      kind: "group";
+      key: string;
+      id: number;
+      name: string;
+      nameEn: string | null;
+      typeCount: number;
+      depth: number;
+      hasChildren: boolean;
+      isOpen: boolean;
+    }
   | { kind: "type"; key: string; id: number; name: string; depth: number };
 
 
@@ -102,12 +115,20 @@ function formatIsk(value: number): string {
  * 树结构在前端构建：父分组缺失的脏数据挂到根节点，避免节点丢失。
  * 每个分组展开后，除了子分组外还会列出自己的「直属物品」。
  */
-export default function MarketGroupBrowser() {
+/** 物品列表的筛选模式 */
+type FilterMode = "all" | "market" | "mine";
+
+export default function MarketGroupBrowser({
+  characterId,
+}: {
+  characterId: number | null;
+}) {
   const queryClient = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [selection, setSelection] = useState<Selection>(null);
   const [structureId, setStructureId] = useState<number | null>(null);
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
   /** 左栏宽度（可拖动分隔条调整） */
   const [leftWidth, setLeftWidth] = useState(240);
   /** 左栏整体收起，右侧占满 */
@@ -141,6 +162,33 @@ export default function MarketGroupBrowser() {
 
   const typeNames = typeNamesQuery.data ?? {};
   const structures = structuresQuery.data ?? [];
+
+  /** 该建筑内有订单的物品 */
+  const marketTypesQuery = useQuery({
+    queryKey: ["structure-type-ids", structureId],
+    queryFn: () => listStructureTypeIds(structureId as number),
+    enabled: structureId !== null && filterMode === "market",
+    staleTime: 30_000,
+  });
+
+  /** 自己挂了单的物品 */
+  const myTypesQuery = useQuery({
+    queryKey: ["my-order-type-ids", characterId],
+    queryFn: () => listCharacterOrderTypeIds(characterId as number),
+    enabled: characterId !== null && filterMode === "mine",
+    staleTime: 30_000,
+  });
+
+  /** 允许出现的物品类型；null 表示不过滤 */
+  const allowedTypes = useMemo(() => {
+    if (filterMode === "market") {
+      return new Set(marketTypesQuery.data ?? []);
+    }
+    if (filterMode === "mine") {
+      return new Set(myTypesQuery.data ?? []);
+    }
+    return null;
+  }, [filterMode, marketTypesQuery.data, myTypesQuery.data]);
 
   // 默认选中第一个已录入的建筑
   useEffect(() => {
@@ -223,49 +271,112 @@ export default function MarketGroupBrowser() {
     document.addEventListener("mouseup", onUp);
   };
 
-  /** 全量扁平列表：分类之后紧跟它的直属物品，深度优先铺开 */
-  const flatRows = useMemo<FlatRow[]>(() => {
+  /** 展开的分类（默认全部收起，只显示顶层分类） */
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  const toggleGroup = (id: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /**
+   * 生成扁平行。
+   * @param expandAll true 时忽略展开状态（搜索时用，避免命中项被折叠挡住）
+   */
+  const buildRows = (
+    expandAll: boolean,
+    allowed: Set<number> | null,
+  ): FlatRow[] => {
     const rows: FlatRow[] = [];
 
-    const walk = (list: GroupNode[], depth: number) => {
+    /** 返回该分支下是否有内容（用于过滤时剔除空分类） */
+    const walk = (list: GroupNode[], depth: number): number => {
+      let kept = 0;
+
       for (const node of list) {
+        const children = childrenMap.get(node.id) ?? [];
+        const matchedTypes =
+          allowed === null
+            ? node.types
+            : node.types.filter((typeId) => allowed.has(typeId));
+
+        const hasChildren = children.length > 0 || matchedTypes.length > 0;
+        const isOpen = expandAll || expanded.has(node.id);
+
+        const startIndex = rows.length;
         rows.push({
           kind: "group",
           key: `g-${node.id}`,
           id: node.id,
           name: node.name,
           nameEn: node.nameEn,
-          typeCount: node.types.length,
+          typeCount: matchedTypes.length,
           depth,
+          hasChildren,
+          isOpen,
         });
 
-        walk(childrenMap.get(node.id) ?? [], depth + 1);
+        let childKept = 0;
+        let typeKept = 0;
 
-        for (const typeId of node.types) {
-          rows.push({
-            kind: "type",
-            key: `t-${typeId}`,
-            id: typeId,
-            name: typeNames[typeId] ?? `#${typeId}`,
-            depth: depth + 1,
-          });
+        if (hasChildren && isOpen) {
+          childKept = walk(children, depth + 1);
+
+          // 子分支都没内容时，连分组行一起撤掉
+          if (allowed !== null && childKept === 0 && matchedTypes.length === 0) {
+            rows.splice(startIndex);
+            continue;
+          }
+
+          for (const typeId of matchedTypes) {
+            rows.push({
+              kind: "type",
+              key: `t-${typeId}`,
+              id: typeId,
+              name: typeNames[typeId] ?? `#${typeId}`,
+              depth: depth + 1,
+            });
+            typeKept += 1;
+          }
+        } else if (allowed !== null && matchedTypes.length === 0) {
+          rows.splice(startIndex);
+          continue;
         }
+
+        kept += 1 + childKept + typeKept;
       }
+
+      return kept;
     };
 
     walk(roots, 0);
     return rows;
-  }, [roots, childrenMap, typeNames]);
+  };
+
+  /** 按当前展开状态可见的行 */
+  const visibleRows = useMemo(
+    // 筛选状态下强制展开，否则命中的物品藏在折叠的分类里
+    () => buildRows(allowedTypes !== null, allowedTypes),
+    [roots, childrenMap, typeNames, expanded, allowedTypes],
+  );
+
+  /** 全量行（所有分类都展开），仅搜索时使用 */
+  const allRows = useMemo(
+    () => buildRows(true, allowedTypes),
+    [roots, childrenMap, typeNames, allowedTypes],
+  );
 
   /** 搜索：分类名或物品名命中 */
   const filteredRows = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    if (!kw) return flatRows;
+    if (!kw) return visibleRows;
 
-    return flatRows.filter((row) =>
-      row.name.toLowerCase().includes(kw),
-    );
-  }, [flatRows, keyword]);
+    return allRows.filter((row) => row.name.toLowerCase().includes(kw));
+  }, [visibleRows, allRows, keyword]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -350,10 +461,20 @@ export default function MarketGroupBrowser() {
               : { kind: "type", id: row.id },
           )
         }
+        // 双击分类展开 / 折叠，与点击箭头等效
+        onDoubleClick={() => {
+          if (row.kind === "group" && row.hasChildren) toggleGroup(row.id);
+        }}
         title={
-          row.kind === "group" && row.nameEn && row.nameEn !== row.name
-            ? `${row.name} / ${row.nameEn}`
-            : row.name
+          row.kind === "group" && row.hasChildren
+            ? `双击展开 / 折叠${
+                row.nameEn && row.nameEn !== row.name
+                  ? ` · ${row.name} / ${row.nameEn}`
+                  : ` · ${row.name}`
+              }`
+            : row.kind === "group" && row.nameEn && row.nameEn !== row.name
+              ? `${row.name} / ${row.nameEn}`
+              : row.name
         }
         className={cn(
           "relative flex h-8 cursor-pointer items-center gap-1.5 rounded-sm pr-2 outline-none transition-colors",
@@ -363,7 +484,11 @@ export default function MarketGroupBrowser() {
               ? "text-[#b6cde2] hover:bg-white/[0.04]"
               : "text-[#8aa7bf] hover:bg-white/[0.04] hover:text-[#c4d8e8]",
         )}
-        style={{ paddingLeft: `${row.depth * 14 + 6}px` }}
+        style={{
+          paddingLeft: `${
+            row.depth * 14 + (row.kind === "type" ? 34 : 6)
+          }px`,
+        }}
       >
         {isSelected && (
           <span className="absolute inset-y-1 left-0 w-[2px] rounded-full bg-cyan-400" />
@@ -371,6 +496,27 @@ export default function MarketGroupBrowser() {
 
         {row.kind === "group" ? (
           <>
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label={row.isOpen ? "收起" : "展开"}
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleGroup(row.id);
+              }}
+              className={cn(
+                "flex size-4 shrink-0 items-center justify-center text-[#4b6c8a] transition-colors hover:text-cyan-300",
+                !row.hasChildren && "invisible",
+              )}
+            >
+              <ChevronRight
+                className={cn(
+                  "size-3 transition-transform duration-150",
+                  row.isOpen && "rotate-90",
+                )}
+              />
+            </button>
+
             <Folder className="size-3.5 shrink-0 text-cyan-400/60" />
             <span
               className={cn(
@@ -392,12 +538,9 @@ export default function MarketGroupBrowser() {
             )}
           </>
         ) : (
-          <>
-            <span className="min-w-0 flex-1 truncate text-[12px]">{row.name}</span>
-            <span className="shrink-0 font-mono text-[10px] tabular-nums text-[#5b7c99]">
-              {row.id}
-            </span>
-          </>
+          <span className="min-w-0 flex-1 truncate pl-[26px] text-[12px]">
+            {row.name}
+          </span>
         )}
       </div>
     );
@@ -431,7 +574,7 @@ export default function MarketGroupBrowser() {
               同步中…
             </>
           ) : (
-            "从 ESI 同步"
+            "从 ESI 更新分类"
           )}
         </Button>
       </Empty>
@@ -439,7 +582,7 @@ export default function MarketGroupBrowser() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <select
           className="h-9 max-w-56 rounded-md border border-cyan-500/25 bg-[#0a1118]/80 px-2 text-sm text-cyan-50/90 outline-none focus:border-cyan-400/50"
@@ -459,6 +602,30 @@ export default function MarketGroupBrowser() {
           )}
         </select>
 
+        <div className="flex items-center gap-0.5 rounded-md border border-cyan-500/20 bg-[#0a1118]/60 p-0.5">
+          {(
+            [
+              { key: "all", label: "全部物品" },
+              { key: "market", label: "市场有订单" },
+              { key: "mine", label: "我的订单" },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setFilterMode(item.key)}
+              className={cn(
+                "rounded px-2 py-1 text-[11px] transition-colors",
+                filterMode === item.key
+                  ? "bg-cyan-400/15 text-cyan-100"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
         <Badge variant="secondary" className="tabular-nums">
           {totalGroups} 个分类
         </Badge>
@@ -471,24 +638,24 @@ export default function MarketGroupBrowser() {
           onClick={() => void handleSync()}
         >
           <RefreshCw className={syncing ? "animate-spin" : undefined} />
-          {syncing ? "同步中…" : "重新同步"}
+          {syncing ? "更新中…" : "从 ESI 更新分类"}
         </Button>
       </div>
 
-      <div className="flex flex-col gap-3 md:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
         {collapsed ? (
           <button
             type="button"
             onClick={() => setCollapsed(false)}
             title="展开分类树"
-            className="flex h-[460px] w-6 shrink-0 items-center justify-center rounded-md border border-border bg-card/40 text-muted-foreground transition-colors hover:text-foreground"
+            className="flex h-[360px] w-6 shrink-0 items-center justify-center md:h-full rounded-md border border-border bg-card/40 text-muted-foreground transition-colors hover:text-foreground"
           >
             <PanelLeftOpen className="size-3.5" />
           </button>
         ) : (
           <>
           <div
-            className="flex h-[460px] w-full shrink-0 flex-col overflow-hidden rounded-md border border-cyan-500/20 bg-[#0a1118]/85 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)] md:w-[var(--left-w)]"
+            className="flex h-[360px] min-h-0 w-full shrink-0 flex-col overflow-hidden md:h-full rounded-md border border-cyan-500/20 bg-[#0a1118]/85 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)] md:w-[var(--left-w)]"
             style={{ "--left-w": `${leftWidth}px` } as React.CSSProperties}
           >
             <div className="flex items-center justify-between border-b border-cyan-500/15 px-3 py-2.5">
@@ -530,7 +697,11 @@ export default function MarketGroupBrowser() {
             >
               {filteredRows.length === 0 ? (
                 <p className="px-3 py-6 text-center text-[11px] text-[#5b7c99]">
-                  没有匹配的分类或物品
+                  {filterMode === "market"
+                    ? "该建筑当前没有订单数据，或还没有同步过订单"
+                    : filterMode === "mine"
+                      ? "当前角色在这段时间内没有挂单物品"
+                      : "没有匹配的分类或物品"}
                 </p>
               ) : (
                 <div
@@ -578,7 +749,7 @@ export default function MarketGroupBrowser() {
         <ScrollArea
           // 切换物品时重建滚动容器，避免停留在上一次的滚动位置
           key={`${structureId ?? 0}-${selectedTypeId ?? "none"}`}
-          className="h-[460px] min-w-0 flex-1 rounded-md border border-cyan-500/20 bg-[#0a1118]/85 p-4 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)]"
+          className="h-[360px] min-h-0 min-w-0 flex-1 rounded-md md:h-full border border-cyan-500/20 bg-[#0a1118]/85 p-4 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)]"
         >
           {selectedTypeId === null ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
@@ -630,7 +801,7 @@ function TypeOrders({
         <EmptyHeader>
           <EmptyTitle>还没有可查询的建筑</EmptyTitle>
           <EmptyDescription>
-            到「建筑管理」标签页录入或同步一个有市场的建筑，并先同步一次订单。
+            到「同步市场订单」标签页录入建筑并同步一次订单。
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -667,7 +838,7 @@ function TypeOrders({
           <EmptyHeader>
             <EmptyTitle>该建筑没有这个物品的订单</EmptyTitle>
             <EmptyDescription>
-              可能确实无人挂单，也可能尚未同步该建筑的订单。到「建筑订单」标签页点「同步」后再看。
+              可能确实无人挂单，也可能尚未同步该建筑的订单。到「同步市场订单」标签页点「同步」后再看。
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

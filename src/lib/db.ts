@@ -670,3 +670,29 @@ export async function listTypeOrders(
     [structureId, typeId],
   );
 }
+
+/* ---------- 筛选用的物品类型集合 ---------- */
+
+/** 某建筑内当前有订单的物品类型 ID */
+export async function listStructureTypeIds(
+  structureId: number,
+): Promise<number[]> {
+  const db = await getDb();
+  const rows = await db.select<{ type_id: number }[]>(
+    "SELECT DISTINCT type_id FROM market_structure_order WHERE structure_id = $1",
+    [structureId],
+  );
+  return rows.map((row) => row.type_id);
+}
+
+/** 角色自己挂了单的物品类型 ID */
+export async function listCharacterOrderTypeIds(
+  characterId: number,
+): Promise<number[]> {
+  const db = await getDb();
+  const rows = await db.select<{ type_id: number }[]>(
+    "SELECT DISTINCT type_id FROM character_order WHERE character_id = $1",
+    [characterId],
+  );
+  return rows.map((row) => row.type_id);
+}

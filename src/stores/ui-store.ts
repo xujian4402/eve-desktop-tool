@@ -2,8 +2,8 @@ import { create } from "zustand";
 
 export type AccountTab = "characters" | "assets" | "permissions";
 
-/** 市场页的标签页：建筑订单 / 我的订单 / 物品分类 / 建筑管理 */
-export type MarketTab = "structures" | "orders" | "groups" | "manage";
+/** 市场页的标签页：交易市场 / 同步市场订单 / 我的订单 */
+export type MarketTab = "structures" | "orders" | "groups";
 
 interface UiState {
   /** 个人中心当前标签（切换页面后保留） */
@@ -13,10 +13,6 @@ interface UiState {
   /** 市场页当前标签 */
   marketTab: MarketTab;
   setMarketTab: (tab: MarketTab) => void;
-
-  /** 市场页当前展开明细的建筑 */
-  marketDetailStructureId: number | null;
-  setMarketDetailStructureId: (structureId: number | null) => void;
 }
 
 /**
@@ -27,10 +23,6 @@ export const useUiStore = create<UiState>((set) => ({
   accountTab: "characters",
   setAccountTab: (accountTab) => set({ accountTab }),
 
-  marketTab: "structures",
+  marketTab: "groups",
   setMarketTab: (marketTab) => set({ marketTab }),
-
-  marketDetailStructureId: null,
-  setMarketDetailStructureId: (marketDetailStructureId) =>
-    set({ marketDetailStructureId }),
 }));
