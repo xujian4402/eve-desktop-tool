@@ -51,6 +51,13 @@ const STRUCTURES_KEY = ["structures", "with-market"] as const;
 /** 订单表格单侧最多展示条数 */
 const ORDERS_PER_SIDE = 100;
 
+/**
+ * 是否在工具栏展示「从 ESI 更新分类」。
+ * 分类数据已随应用内置（首次进入自动从 SDE 导入），一般用不到在线更新，
+ * 因此默认不展示；功能（handleSync + 后端命令）完整保留，需要时改成 true 即可。
+ */
+const SHOW_ESI_SYNC_BUTTON: boolean = false;
+
 interface GroupNode {
   id: number;
   name: string;
@@ -485,9 +492,8 @@ export default function MarketGroupBrowser({
               : "text-[#8aa7bf] hover:bg-white/[0.04] hover:text-[#c4d8e8]",
         )}
         style={{
-          paddingLeft: `${
-            row.depth * 14 + (row.kind === "type" ? 34 : 6)
-          }px`,
+          // 物品只比父分类多缩进约 12px，比父级深一层但不至于跳太远
+          paddingLeft: `${row.depth * 14 + (row.kind === "type" ? 4 : 6)}px`,
         }}
       >
         {isSelected && (
@@ -538,7 +544,7 @@ export default function MarketGroupBrowser({
             )}
           </>
         ) : (
-          <span className="min-w-0 flex-1 truncate pl-[26px] text-[12px]">
+          <span className="min-w-0 flex-1 truncate text-[12px]">
             {row.name}
           </span>
         )}
@@ -630,16 +636,18 @@ export default function MarketGroupBrowser({
           {totalGroups} 个分类
         </Badge>
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-auto"
-          disabled={syncing}
-          onClick={() => void handleSync()}
-        >
-          <RefreshCw className={syncing ? "animate-spin" : undefined} />
-          {syncing ? "更新中…" : "从 ESI 更新分类"}
-        </Button>
+        {SHOW_ESI_SYNC_BUTTON && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto"
+            disabled={syncing}
+            onClick={() => void handleSync()}
+          >
+            <RefreshCw className={syncing ? "animate-spin" : undefined} />
+            {syncing ? "更新中…" : "从 ESI 更新分类"}
+          </Button>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
@@ -662,9 +670,25 @@ export default function MarketGroupBrowser({
               <span className="text-[11px] font-medium tracking-wide text-cyan-200/85">
                 分类树
               </span>
-              <span className="font-mono text-[10px] text-[#5b7c99]">
-                {totalGroups.toLocaleString()} 分组
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-[#5b7c99]">
+                  {totalGroups.toLocaleString()} 分组
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setExpanded(new Set())}
+                  // 筛选状态下强制展开，收起按钮无意义
+                  disabled={expanded.size === 0 || filterMode !== "all"}
+                  title={
+                    filterMode !== "all"
+                      ? "筛选状态下会强制展开全部分类"
+                      : "收起所有已展开的分类"
+                  }
+                  className="rounded px-1.5 py-0.5 text-[10px] text-cyan-300/70 transition-colors hover:bg-cyan-400/10 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  全部收起
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center gap-1 border-b border-cyan-500/10 p-2">
