@@ -37,7 +37,23 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        # --prod=false 强制安装 devDependencies：
+        # 某些环境下 NODE_ENV=production 会让 pnpm 跳过 devDeps，
+        # 导致 vite.config.ts 依赖的构建期包缺失。
+        run: pnpm install --frozen-lockfile --prod=false
+
+      - name: Verify build-time dependencies
+        shell: bash
+        run: |
+          echo "--- 关键依赖检查 ---"
+          for pkg in tailwindcss @tailwindcss/vite vite; do
+            if [ -d "node_modules/$pkg" ]; then
+              echo "OK   $pkg"
+            else
+              echo "MISS $pkg"
+              exit 1
+            fi
+          done
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
