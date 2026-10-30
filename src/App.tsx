@@ -12,26 +12,27 @@ interface MenuItem {
 }
 
 const MENUS: MenuItem[] = [
-  {
-    key: "planetary",
-    label: "行星工业",
-    description: "行星工业模块占位，后续在此展示殖民地、开采与产出规划。",
-  },
-  {
-    key: "manufacturing",
-    label: "制造业",
-    description: "制造业模块占位，后续在此展示蓝图、材料清单与生产排期。",
-  },
-  {
-    key: "map",
-    label: "地图",
-    description: "地图模块占位，后续在此展示星域、星系与航线信息。",
-  },
-  {
-    key: "killmail",
-    label: "KM查询",
-    description: "KM 查询模块占位，后续在此查询击杀报告与战斗记录。",
-  },
+  // 暂未开放，先隐藏入口；代码保留，恢复时取消注释即可
+  // {
+  //   key: "planetary",
+  //   label: "行星工业",
+  //   description: "行星工业模块占位，后续在此展示殖民地、开采与产出规划。",
+  // },
+  // {
+  //   key: "manufacturing",
+  //   label: "制造业",
+  //   description: "制造业模块占位，后续在此展示蓝图、材料清单与生产排期。",
+  // },
+  // {
+  //   key: "map",
+  //   label: "地图",
+  //   description: "地图模块占位，后续在此展示星域、星系与航线信息。",
+  // },
+  // {
+  //   key: "killmail",
+  //   label: "KM查询",
+  //   description: "KM 查询模块占位，后续在此查询击杀报告与战斗记录。",
+  // },
   {
     key: "market",
     label: "市场",
@@ -45,7 +46,8 @@ const MENUS: MenuItem[] = [
 ];
 
 function App() {
-  const [activeMenu, setActiveMenu] = useState<MenuKey>("planetary");
+  // 默认停在「市场」：行星工业等入口暂时隐藏，不能再作为初始页
+  const [activeMenu, setActiveMenu] = useState<MenuKey>("market");
 
   const current = MENUS.find((menu) => menu.key === activeMenu) ?? MENUS[0];
 
@@ -85,7 +87,13 @@ function App() {
         </nav>
       </header>
 
-      <main className="content">{renderContent()}</main>
+      <main
+        className={
+          activeMenu === "account" ? "content content--fill" : "content"
+        }
+      >
+        {renderContent()}
+      </main>
       <Toaster position="bottom-right" />
     </div>
   );

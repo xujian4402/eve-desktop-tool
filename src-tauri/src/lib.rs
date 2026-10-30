@@ -110,7 +110,8 @@ pub fn run() {
             esi::fetch_character_assets,
             esi::fetch_region_type_orders,
             esi::sync_market_groups,
-            esi::seed_market_groups
+            esi::seed_market_groups,
+            esi::get_type_group_names
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

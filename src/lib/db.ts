@@ -902,18 +902,13 @@ export async function listMyOrderIds(
   return rows.map((row) => row.order_id);
 }
 
-/** 物品 → 所属市场分类名（来自 SDE 导入的 market_type + market_group） */
+/**
+ * 物品 → 所属市场分类名。
+ *
+ * 直接读 Rust 侧内置的 SDE 静态数据（resources/sde-market-groups.json），
+ * 不查 market_type / market_group 表——那两张表要等用户打开「市场」页
+ * 触发 seed_market_groups 才会有数据，资产页的分类列会因此整列空白。
+ */
 export async function getTypeGroupNameMap(): Promise<Record<number, string>> {
-  const db = await getDb();
-  const rows = await db.select<{ type_id: number; name: string }[]>(
-    `SELECT mt.type_id, mg.name
-       FROM market_type mt
-       JOIN market_group mg ON mg.market_group_id = mt.market_group_id`,
-  );
-
-  const map: Record<number, string> = {};
-  for (const row of rows) {
-    map[row.type_id] = row.name;
-  }
-  return map;
+  return invoke<Record<number, string>>("get_type_group_names");
 }

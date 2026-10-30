@@ -140,6 +140,17 @@ body {
     #0b1017;
 }
 
+/*
+ * 需要「填满内容区、自己内部滚动」的页面（个人中心）。
+ * 依赖 flex 传递高度，不用 height:100% 百分比链，
+ * 子元素因此可以放心用 flex-1 分配剩余空间。
+ */
+.content--fill {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .placeholder {
   display: flex;
   flex-direction: column;

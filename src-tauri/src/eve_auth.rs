@@ -583,6 +583,60 @@ fn bind_callback_port() -> Result<TcpListener, String> {
     ))
 }
 
+/// 用系统默认浏览器打开授权页。
+///
+/// 不用 `open` crate：它在 Windows 上先试 powershell.exe、再回退 explorer.exe，
+/// 而本次申请 70+ 作用域拼出的授权地址超过 4 KB，explorer 分支会直接返回
+/// ExitStatus(1)，表现为“无法打开系统浏览器”。
+/// ShellExecuteW 不经过命令行解析，既不受长度限制，也不会被 `&`、`%` 等字符干扰。
+fn open_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        fn wide(value: &str) -> Vec<u16> {
+            std::ffi::OsStr::new(value)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        }
+
+        let operation = wide("open");
+        let target = wide(url);
+
+        // SAFETY: 两个宽字符串均以 NUL 结尾，且在整个调用期间保持存活；
+        // 其余参数传空指针是 ShellExecuteW 允许的用法。
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+
+        // ShellExecuteW 约定：返回值 > 32 才表示成功，<= 32 是错误码
+        let code = result as isize;
+        if code <= 32 {
+            return Err(format!(
+                "无法打开系统浏览器（ShellExecuteW 返回码 {code}）。可手动复制授权地址访问：{url}"
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        open::that(url).map_err(|e| format!("无法打开系统浏览器：{e}"))
+    }
+}
+
 /// 取消正在进行的授权等待。用户在浏览器里关掉页面时，由前端调用。
 #[tauri::command]
 pub fn eve_cancel_login() {
@@ -610,7 +664,7 @@ pub async fn eve_login(
         .map_err(|e| format!("配置本地端口失败：{e}"))?;
 
     let auth_url = build_authorize_url(client_id, &redirect_uri, &state, &challenge);
-    open::that(&auth_url).map_err(|e| format!("无法打开系统浏览器：{e}"))?;
+    open_in_browser(&auth_url)?;
 
     let expected_state = state.clone();
     let code = tokio::task::spawn_blocking(move || wait_for_code(listener, &expected_state))

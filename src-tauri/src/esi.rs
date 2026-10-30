@@ -1346,6 +1346,50 @@ pub async fn seed_market_groups(
     })
 }
 
+/// 精简版静态数据：只取分组名与成员类型。
+///
+/// 完整 payload 里的 `types` 是 5 万多条物品名的表，资产页用不到，
+/// 跳过不解析能省下大量字符串分配。
+#[derive(Debug, Deserialize)]
+struct SdeLeanPayload {
+    groups: Vec<SdeLeanGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SdeLeanGroup {
+    name: String,
+    #[serde(default)]
+    types: Vec<i64>,
+}
+
+/// 物品 → 市场分类名，直接来自内置 SDE 静态数据。
+///
+/// 与 [`seed_market_groups`] 的区别：那个是把静态数据落库，供「市场」页的分类树使用；
+/// 这里不碰数据库，因此个人中心「资产」的分类列不会因为用户还没打开过市场页
+/// （表未导入）而整列空白。
+///
+/// 首次调用解析一次并缓存，后续调用只做一次 HashMap 克隆。
+#[tauri::command]
+pub fn get_type_group_names() -> Result<HashMap<i64, String>, String> {
+    static CACHE: OnceLock<Result<HashMap<i64, String>, String>> = OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            let payload: SdeLeanPayload = serde_json::from_str(SDE_MARKET_GROUPS_JSON)
+                .map_err(|e| format!("解析内置分类数据失败：{e}"))?;
+
+            let mut map: HashMap<i64, String> = HashMap::new();
+            for SdeLeanGroup { name, types } in payload.groups {
+                for type_id in types {
+                    map.insert(type_id, name.clone());
+                }
+            }
+
+            Ok(map)
+        })
+        .clone()
+}
+
 /* ============================================================
    星域订单（Jita 等 NPC 贸易枢纽）
    ============================================================ */
