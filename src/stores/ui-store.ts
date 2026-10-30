@@ -3,7 +3,12 @@ import { create } from "zustand";
 export type AccountTab = "characters" | "assets" | "permissions";
 
 /** 市场页的标签页：交易市场 / 同步市场订单 / 我的订单 */
-export type MarketTab = "structures" | "orders" | "groups" | "compare";
+export type MarketTab =
+  | "groups"
+  | "orders"
+  | "analysis"
+  | "compare"
+  | "structures";
 
 interface UiState {
   /** 个人中心当前标签（切换页面后保留） */
@@ -13,6 +18,9 @@ interface UiState {
   /** 市场页当前标签 */
   marketTab: MarketTab;
   setMarketTab: (tab: MarketTab) => void;
+  /** 从其他标签跳到「交易市场」时要定位的物品；消费后置空 */
+  pendingTypeId: number | null;
+  setPendingTypeId: (typeId: number | null) => void;
 }
 
 /**
@@ -25,4 +33,6 @@ export const useUiStore = create<UiState>((set) => ({
 
   marketTab: "groups",
   setMarketTab: (marketTab) => set({ marketTab }),
+  pendingTypeId: null,
+  setPendingTypeId: (pendingTypeId) => set({ pendingTypeId }),
 }));

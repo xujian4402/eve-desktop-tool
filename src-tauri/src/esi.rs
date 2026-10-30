@@ -162,14 +162,22 @@ pub async fn resolve_structure(
 pub struct EsiOrder {
     pub order_id: i64,
     pub type_id: i64,
+    #[serde(default)]
     pub is_buy_order: bool,
     pub price: f64,
+    #[serde(default)]
     pub volume_remain: i64,
+    #[serde(default)]
     pub volume_total: i64,
+    #[serde(default)]
     pub min_volume: i64,
+    #[serde(default)]
     pub duration: i64,
+    #[serde(default)]
     pub issued: String,
+    #[serde(default)]
     pub range: String,
+    #[serde(default)]
     pub location_id: i64,
     #[serde(default)]
     pub region_id: Option<i64>,
@@ -239,10 +247,22 @@ where
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(1);
 
-        let rows = response
-            .json::<Vec<T>>()
+        // 先取原文再解析：一是不让空响应直接报解码错误，
+        // 二是解析失败时能把响应片段带进错误里，便于定位字段不匹配。
+        let body = response
+            .text()
             .await
-            .map_err(|e| format!("{label}：第 {page} 页解析失败（{e}）"))?;
+            .map_err(|e| format!("{label}：第 {page} 页读取失败（{e}）"))?;
+
+        if body.trim().is_empty() {
+            // ESI 对「没有数据」偶尔返回空 body 而不是 []
+            break;
+        }
+
+        let rows = serde_json::from_str::<Vec<T>>(&body).map_err(|e| {
+            let snippet: String = body.chars().take(300).collect();
+            format!("{label}：第 {page} 页解析失败（{e}）；响应片段：{snippet}")
+        })?;
 
         all.extend(rows);
 
@@ -311,6 +331,9 @@ struct EsiAsset {
     location_flag: String,
     #[serde(default)]
     is_blueprint_copy: bool,
+    /// 已组装/单个物品。ESI 对这种条目返回的 quantity 可能是 -1，不能直接累加
+    #[serde(default)]
+    is_singleton: bool,
 }
 
 /// 拉取分页资产列表。返回 (资产列表, 是否因页数上限被截断)
@@ -389,18 +412,6 @@ async fn fetch_character_asset_pages(
     .await
 }
 
-/// 军团资产（军团机库、建筑仓库里的物品）
-async fn fetch_corporation_asset_pages(
-    corporation_id: i64,
-    token: &str,
-) -> Result<(Vec<EsiAsset>, bool), String> {
-    fetch_asset_pages(
-        format!("{ESI_BASE}/corporations/{corporation_id}/assets/"),
-        token,
-        "军团资产",
-    )
-    .await
-}
 
 /// 把资产的位置向上追溯到「非容器」的位置。
 ///
@@ -415,14 +426,26 @@ fn resolve_root_location(
     let mut depth = 0;
 
     while location_type == "item" && depth < 16 {
-        let (next_id, next_type) = index.get(&location_id)?;
-        location_id = *next_id;
-        location_type = next_type.clone();
-        depth += 1;
+        match index.get(&location_id) {
+            Some((next_id, next_type)) => {
+                location_id = *next_id;
+                location_type = next_type.clone();
+                depth += 1;
+            }
+            // 容器不在资产列表里：它多半就是玩家建筑本身。
+            // 建筑在 ESI 里是 item 类型，但建筑不是角色资产，所以查不到——
+            // 之前这里直接返回 None，导致放在星城/铁壁机库里的物品全部丢失。
+            None => {
+                if location_id >= STRUCTURE_ID_MIN {
+                    return Some((location_id, "structure".to_string()));
+                }
+                return None;
+            }
+        }
     }
 
     if location_type == "item" {
-        // 循环引用或层级过深，放弃这条资产
+        // 层数耗尽仍在 item 里，视为循环引用，放弃这条资产
         return None;
     }
 
@@ -691,8 +714,6 @@ pub struct AssetItem {
     pub quantity: i64,
     pub location_flag: String,
     pub is_blueprint_copy: bool,
-    /// character（个人资产） | corporation（军团资产）
-    pub source: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -713,17 +734,59 @@ pub struct AssetsPayload {
     pub asset_count: usize,
     /// 是否因页数上限被截断（大号角色资产可能达数万条）
     pub truncated: bool,
-    /// 军团资产条数（无权限时为 0）
-    pub corporation_asset_count: usize,
-    /// 军团资产未能加载时的原因说明
-    pub corporation_note: Option<String>,
 }
 
 /// 批量解析 ID → 名称。单批失败只丢该批，不影响整体。
-async fn resolve_names_bulk(ids: &[i64]) -> HashMap<i64, String> {
+/// 批量解析名称：本地 eve_type 的中文名优先，缺失的再走 ESI。
+///
+/// ESI 的 /universe/names/ 只返回英文，直接用它会让资产、订单里的物品名
+/// 全变成英文；本地 SDE 已经导入了 5 万多条中文名，先查本地又快又准。
+async fn resolve_names_bulk(
+    pool: &SqlitePool,
+    ids: &[i64],
+) -> HashMap<i64, String> {
     let mut names: HashMap<i64, String> = HashMap::new();
 
-    for batch in ids.chunks(1000) {
+    // 1. 本地中文名
+    for chunk in ids.chunks(500) {
+        let mut builder = sqlx::QueryBuilder::new(
+            "SELECT type_id, COALESCE(name_zh, name_en) AS name FROM eve_type WHERE type_id IN (",
+        );
+
+        let mut separated = builder.separated(", ");
+        for id in chunk {
+            separated.push_bind(*id);
+        }
+        separated.push_unseparated(")");
+
+        let rows = builder
+            .build_query_as::<(i64, Option<String>)>()
+            .fetch_all(pool)
+            .await;
+
+        if let Ok(rows) = rows {
+            for (id, name) in rows {
+                if let Some(name) = name {
+                    if !name.is_empty() {
+                        names.insert(id, name);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 本地没有的再问 ESI（英文兜底）
+    let missing: Vec<i64> = ids
+        .iter()
+        .copied()
+        .filter(|id| !names.contains_key(id))
+        .collect();
+
+    if missing.is_empty() {
+        return names;
+    }
+
+    for batch in missing.chunks(1000) {
         let response = http()
             .post(format!("{ESI_BASE}/universe/names/"))
             .query(&[("datasource", "tranquility")])
@@ -778,51 +841,21 @@ async fn character_corporation_id(pool: &SqlitePool, character_id: i64) -> Optio
     .flatten()
 }
 
-/// 拉取角色资产 + 军团资产，合并后按所在建筑 / NPC 空间站 / 星系分组。
+/// 拉取角色个人资产，按所在建筑 / NPC 空间站 / 星系分组。
 ///
-/// 玩家建筑里的物品通常有两类来源：
-///   * 角色个人机库里的物品 → /characters/{id}/assets/
-///   * 军团机库/军团建筑仓库里的物品 → /corporations/{id}/assets/（需军团资产查看权限）
-/// 两者都拉，按位置合并展示，并给每条物品标注来源。
+/// 只取 /characters/{id}/assets/，不合并军团资产——
+/// 军团机库里的物品不属于该角色，混进来会干扰个人资产盘点。
 #[tauri::command]
 pub async fn fetch_character_assets(
     character_id: i64,
     pool: tauri::State<'_, SqlitePool>,
 ) -> Result<AssetsPayload, String> {
     let token = ensure_token(pool.inner(), character_id).await?;
+    let (assets, truncated) = fetch_character_asset_pages(character_id, &token).await?;
 
-    let (character_assets, character_truncated) =
-        fetch_character_asset_pages(character_id, &token).await?;
-
-    // 军团资产是可选增强：无权限时跳过并给出说明，不影响个人资产展示
-    let mut corporation_assets: Vec<EsiAsset> = Vec::new();
-    let mut corporation_note: Option<String> = None;
-    let mut corporation_truncated = false;
-
-    match character_corporation_id(pool.inner(), character_id).await {
-        Some(corporation_id) => {
-            match fetch_corporation_asset_pages(corporation_id, &token).await {
-                Ok((assets, truncated)) => {
-                    corporation_assets = assets;
-                    corporation_truncated = truncated;
-                }
-                Err(err) => {
-                    corporation_note = Some(format!(
-                        "军团资产未加载：{err} 需要在军团中拥有资产查看权限（如总监或对应职位）。"
-                    ));
-                }
-            }
-        }
-        None => {
-            corporation_note =
-                Some("本地没有该角色的军团信息，无法拉取军团资产。".to_string());
-        }
-    }
-
-    // item_id 全局唯一，两类资产可以共用一份索引做容器上溯
-    let index: HashMap<i64, (i64, String)> = character_assets
+    // item_id → (所在位置 ID, 位置类型)，用于容器上溯
+    let index: HashMap<i64, (i64, String)> = assets
         .iter()
-        .chain(corporation_assets.iter())
         .map(|asset| {
             (
                 asset.item_id,
@@ -831,64 +864,69 @@ pub async fn fetch_character_assets(
         })
         .collect();
 
-    let mut buckets: HashMap<i64, (String, Vec<(&'static str, &EsiAsset)>)> = HashMap::new();
+    let mut buckets: HashMap<i64, (String, Vec<&EsiAsset>)> = HashMap::new();
 
-    for asset in &character_assets {
+    for asset in &assets {
         if let Some((root, root_type)) = resolve_root_location(asset, &index) {
             buckets
                 .entry(root)
                 .or_insert_with(|| (root_type, Vec::new()))
                 .1
-                .push(("character", asset));
+                .push(asset);
         }
     }
 
-    for asset in &corporation_assets {
-        if let Some((root, root_type)) = resolve_root_location(asset, &index) {
-            buckets
-                .entry(root)
-                .or_insert_with(|| (root_type, Vec::new()))
-                .1
-                .push(("corporation", asset));
-        }
-    }
-
-    // 物品名称：合并两类资产的 type_id，一次批量解析
+    // 物品名称：一次批量解析，避免逐条请求
     let type_ids: Vec<i64> = {
-        let mut ids: Vec<i64> = character_assets
-            .iter()
-            .chain(corporation_assets.iter())
-            .map(|asset| asset.type_id)
-            .collect();
+        let mut ids: Vec<i64> = assets.iter().map(|asset| asset.type_id).collect();
         ids.sort_unstable();
         ids.dedup();
         ids
     };
-    let type_names = resolve_names_bulk(&type_ids).await;
+    let type_names = resolve_names_bulk(pool.inner(), &type_ids).await;
 
     let mut groups: Vec<AssetGroup> = Vec::new();
 
     for (location_id, (location_type, items)) in buckets {
         let location_name = resolve_location_name(location_id, &location_type, &token).await;
 
-        let mut asset_items: Vec<AssetItem> = items
-            .iter()
-            .filter(|(_, asset)| asset.type_id > 0)
-            .map(|(source, asset)| AssetItem {
-                type_id: asset.type_id,
-                type_name: type_names.get(&asset.type_id).cloned(),
-                quantity: asset.quantity,
-                location_flag: asset.location_flag.clone(),
-                is_blueprint_copy: asset.is_blueprint_copy,
-                source: (*source).to_string(),
+        // 同一建筑里同一种物品可能拆成多条记录，按「类型 + 槽位 + 蓝图拷贝」合并。
+        // 单件物品（已组装 / 蓝图拷贝）的数量一律按 1 计：
+        // ESI 对这类条目的 quantity 可能返回 -1，直接累加会把总数算错。
+        let mut merged: HashMap<(i64, String, bool), i64> = HashMap::new();
+
+        for asset in items.iter() {
+            if asset.type_id <= 0 {
+                continue;
+            }
+
+            let quantity = if asset.is_singleton || asset.is_blueprint_copy {
+                1
+            } else {
+                asset.quantity.max(0)
+            };
+
+            let key = (
+                asset.type_id,
+                asset.location_flag.clone(),
+                asset.is_blueprint_copy,
+            );
+
+            *merged.entry(key).or_insert(0) += quantity;
+        }
+
+        let mut asset_items: Vec<AssetItem> = merged
+            .into_iter()
+            .map(|((type_id, location_flag, is_blueprint_copy), quantity)| AssetItem {
+                type_id,
+                type_name: type_names.get(&type_id).cloned(),
+                quantity,
+                location_flag,
+                is_blueprint_copy,
             })
             .collect();
 
-        asset_items.sort_by(|a, b| {
-            a.type_id
-                .cmp(&b.type_id)
-                .then_with(|| a.source.cmp(&b.source))
-        });
+        asset_items.sort_by(|a, b| a.type_id.cmp(&b.type_id));
 
         let total_quantity = asset_items.iter().map(|item| item.quantity).sum();
 
@@ -919,10 +957,8 @@ pub async fn fetch_character_assets(
 
     Ok(AssetsPayload {
         groups,
-        asset_count: character_assets.len(),
-        truncated: character_truncated || corporation_truncated,
-        corporation_asset_count: corporation_assets.len(),
-        corporation_note,
+        asset_count: assets.len(),
+        truncated,
     })
 }
 
@@ -1107,7 +1143,7 @@ pub async fn sync_market_groups(
         all
     };
 
-    let names = resolve_names_bulk(&type_ids).await;
+    let names = resolve_names_bulk(pool.inner(), &type_ids).await;
     let type_names = names.len();
     let entries: Vec<(i64, String)> = names.into_iter().collect();
 

@@ -69,7 +69,7 @@ function App() {
   return (
     <div className="app">
       <header className="menubar">
-        <span className="brand">EVE 工业助手</span>
+        <span className="brand">EVE-无面者军团-工具</span>
 
         <nav className="menu">
           {MENUS.map((menu) => (

@@ -29,11 +29,14 @@ import {
   listCharacterOrderTypeIds,
   listMarketGroups,
   listStructureTypeIds,
+  listMyOrderIds,
   listStructures,
   listTypeOrders,
   type MarketGroupRow,
   type MarketGroupSyncResult,
 } from "@/lib/db";
+import { useUiStore } from "@/stores/ui-store";
+import { formatOrderRange } from "@/lib/order-labels";
 
 const MARKET_GROUP_KEY = ["market-groups"] as const;
 const TYPE_NAME_KEY = ["type-names"] as const;
@@ -116,20 +119,6 @@ function toNode(row: MarketGroupRow): GroupNode {
   };
 }
 
-/** ESI 订单范围 → 中文说明。数字表示以挂单点为中心的跳跃数 */
-function formatOrderRange(range: string): string {
-  switch (range) {
-    case "station":
-      return "本空间站";
-    case "solar_system":
-      return "本星系";
-    case "region":
-      return "本星域";
-    default:
-      return /^\d+$/.test(range) ? `${range} 跳` : range;
-  }
-}
-
 function formatIsk(value: number): string {
   return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
@@ -207,6 +196,18 @@ export default function MarketGroupBrowser({
     enabled: characterId !== null && filterMode === "mine",
     staleTime: 30_000,
   });
+
+  /** 我自己挂出的订单 ID（含所有已同步角色），用于在订单表里高亮 */
+  const myOrderIdsQuery = useQuery({
+    queryKey: ["my-order-ids"],
+    queryFn: () => listMyOrderIds(),
+    staleTime: 60_000,
+  });
+
+  const myOrderIds = useMemo(
+    () => new Set(myOrderIdsQuery.data ?? []),
+    [myOrderIdsQuery.data],
+  );
 
   /** 允许出现的物品类型；null 表示不过滤 */
   const allowedTypes = useMemo(() => {
@@ -574,7 +575,18 @@ export default function MarketGroupBrowser({
     );
   };
 
+  /** 从「我的订单」跳转过来时要定位的物品 */
+  const pendingTypeId = useUiStore((state) => state.pendingTypeId);
+  const setPendingTypeId = useUiStore((state) => state.setPendingTypeId);
+
   const selectedTypeId = selection?.kind === "type" ? selection.id : null;
+
+  // 从订单页跳过来：直接选中该物品并清掉标记
+  useEffect(() => {
+    if (pendingTypeId === null) return;
+    setSelection({ kind: "type", id: pendingTypeId });
+    setPendingTypeId(null);
+  }, [pendingTypeId, setPendingTypeId]);
 
   const totalGroups = nodes.length;
 
@@ -818,6 +830,7 @@ export default function MarketGroupBrowser({
               marketKey={marketKey}
               typeId={selectedTypeId}
               typeName={typeNames[selectedTypeId] ?? `#${selectedTypeId}`}
+              myOrderIds={myOrderIds}
             />
           )}
         </div>
@@ -831,10 +844,12 @@ function TypeOrders({
   marketKey,
   typeId,
   typeName,
+  myOrderIds,
 }: {
   marketKey: string;
   typeId: number;
   typeName: string;
+  myOrderIds: Set<number>;
 }) {
   const isJita = marketKey === JITA_KEY;
   const structureId = isJita ? null : Number(marketKey) || null;
@@ -941,12 +956,14 @@ function TypeOrders({
             tone="sell"
             orders={sells}
             emptyText="没有卖单"
+            myOrderIds={myOrderIds}
           />
           <OrderTable
             title="收购订单"
             tone="buy"
             orders={buys}
             emptyText="没有买单"
+            myOrderIds={myOrderIds}
           />
         </>
       )}
@@ -959,6 +976,7 @@ function OrderTable({
   tone,
   orders,
   emptyText,
+  myOrderIds,
 }: {
   title: string;
   tone: "sell" | "buy";
@@ -971,6 +989,7 @@ function OrderTable({
     range: string;
   }[];
   emptyText: string;
+  myOrderIds: Set<number>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -1022,17 +1041,31 @@ function OrderTable({
               const order = sorted[item.index];
               if (!order) return null;
 
+              const isMine = myOrderIds.has(order.order_id);
+
               return (
                 <div
                   key={order.order_id}
-                  className="absolute inset-x-0 grid grid-cols-[1fr_1.15fr_0.7fr_0.8fr] items-center gap-2 px-1 text-[11px]"
+                  className={cn(
+                    "absolute inset-x-0 grid grid-cols-[1fr_1.15fr_0.7fr_0.8fr] items-center gap-2 px-1 text-[11px]",
+                    isMine &&
+                      "bg-cyan-400/10 shadow-[inset_2px_0_0_0_#22d3ee]",
+                  )}
                   style={{
                     height: item.size,
                     transform: `translateY(${item.start}px)`,
                   }}
+                  title={isMine ? "这是你自己挂出的订单" : undefined}
                 >
-                  <span className={cn("font-mono tabular-nums", priceColor)}>
-                    {formatIsk(order.price)}
+                  <span className="flex items-center gap-1">
+                    {isMine && (
+                      <span className="shrink-0 rounded-sm bg-cyan-400/20 px-1 font-mono text-[9px] text-cyan-200">
+                        我
+                      </span>
+                    )}
+                    <span className={cn("font-mono tabular-nums", priceColor)}>
+                      {formatIsk(order.price)}
+                    </span>
                   </span>
                   <span className="font-mono tabular-nums text-foreground/75">
                     {order.volume_remain.toLocaleString()} /{" "}

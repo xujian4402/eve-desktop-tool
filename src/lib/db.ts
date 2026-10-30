@@ -459,6 +459,12 @@ export async function saveCharacterOrders(
 export interface CharacterOrderView {
   order_id: number;
   type_id: number;
+  /** 物品名称（来自 eve_type，可能为 null） */
+  type_name: string | null;
+  /** 挂单位置名称（已收录建筑才有名字，否则为 null） */
+  location_name: string | null;
+  /** 挂单持续天数 */
+  duration: number;
   location_id: number;
   region_id: number;
   is_buy_order: number;
@@ -477,12 +483,16 @@ export async function listCharacterOrders(
 ): Promise<CharacterOrderView[]> {
   const db = await getDb();
   return db.select<CharacterOrderView[]>(
-    `SELECT order_id, type_id, location_id, region_id, is_buy_order, price,
-            volume_remain, volume_total, min_volume, issued_at, range, escrow,
-            is_corporation
-       FROM character_order
-      WHERE character_id = $1
-      ORDER BY is_buy_order ASC, price DESC`,
+    `SELECT o.order_id, o.type_id, o.location_id, o.region_id, o.is_buy_order,
+            o.price, o.volume_remain, o.volume_total, o.min_volume, o.duration,
+            o.issued_at, o.range, o.escrow, o.is_corporation,
+            COALESCE(t.name_zh, t.name_en) AS type_name,
+            s.name AS location_name
+       FROM character_order o
+       LEFT JOIN eve_type t ON t.type_id = o.type_id
+       LEFT JOIN market_structure s ON s.structure_id = o.location_id
+      WHERE o.character_id = $1
+      ORDER BY o.is_buy_order ASC, o.price DESC`,
     [characterId],
   );
 }
@@ -507,8 +517,6 @@ export interface AssetItem {
   quantity: number;
   locationFlag: string;
   isBlueprintCopy: boolean;
-  /** character：角色个人资产；corporation：军团资产 */
-  source: "character" | "corporation";
 }
 
 export interface AssetGroup {
@@ -524,10 +532,6 @@ export interface AssetsPayload {
   assetCount: number;
   /** 资产条数超过分页上限时为 true，提示结果不完整 */
   truncated: boolean;
-  /** 军团资产条数（无权限时为 0） */
-  corporationAssetCount: number;
-  /** 军团资产未能加载时的原因说明 */
-  corporationNote: string | null;
 }
 
 /** 「同步建筑」通过五源汇总发现的玩家建筑 */
@@ -806,4 +810,110 @@ export async function listOrderBookLevels(
       GROUP BY o.structure_id, o.type_id, o.is_buy_order, o.price`,
     [structureA, structureB],
   );
+}
+
+/* ---------- 我的订单：汇总与竞争力 ---------- */
+
+export interface CharacterOrderStats {
+  order_count: number;
+  /** 卖单挂单总价值（单价 × 剩余量） */
+  sell_value: number;
+  /** 买单挂单总价值 */
+  buy_value: number;
+  /** 买单冻结的托管金额 */
+  escrow_total: number;
+}
+
+export async function getCharacterOrderStats(
+  characterId: number,
+): Promise<CharacterOrderStats> {
+  const db = await getDb();
+  const rows = await db.select<CharacterOrderStats[]>(
+    `SELECT COUNT(*) AS order_count,
+            COALESCE(SUM(CASE WHEN is_buy_order = 0 THEN price * volume_remain ELSE 0 END), 0) AS sell_value,
+            COALESCE(SUM(CASE WHEN is_buy_order = 1 THEN price * volume_remain ELSE 0 END), 0) AS buy_value,
+            COALESCE(SUM(COALESCE(escrow, 0)), 0) AS escrow_total
+       FROM character_order
+      WHERE character_id = $1`,
+    [characterId],
+  );
+
+  return (
+    rows[0] ?? {
+      order_count: 0,
+      sell_value: 0,
+      buy_value: 0,
+      escrow_total: 0,
+    }
+  );
+}
+
+export interface OrderMarketPrice {
+  structure_id: number;
+  type_id: number;
+  best_sell: number | null;
+  best_buy: number | null;
+}
+
+/**
+ * 取「我的订单涉及的建筑 + 物品」在同建筑里的最优买卖价，
+ * 用于判断自己的挂单是否被压价。只覆盖已同步过订单的建筑。
+ */
+export async function listMyOrderMarketPrices(
+  characterId: number,
+): Promise<OrderMarketPrice[]> {
+  const db = await getDb();
+
+  return db.select<OrderMarketPrice[]>(
+    `SELECT o.structure_id,
+            o.type_id,
+            MIN(CASE WHEN o.is_buy_order = 0 THEN o.price END) AS best_sell,
+            MAX(CASE WHEN o.is_buy_order = 1 THEN o.price END) AS best_buy
+       FROM market_structure_order o
+      WHERE EXISTS (
+              SELECT 1
+                FROM character_order c
+               WHERE c.character_id = $1
+                 AND c.location_id = o.structure_id
+                 AND c.type_id = o.type_id
+            )
+      GROUP BY o.structure_id, o.type_id`,
+    [characterId],
+  );
+}
+
+/** 当前已同步的所有角色订单 ID，用于在市场上标出自己的挂单 */
+export async function listMyOrderIds(
+  characterId?: number,
+): Promise<number[]> {
+  const db = await getDb();
+
+  if (characterId === undefined) {
+    const rows = await db.select<{ order_id: number }[]>(
+      "SELECT order_id FROM character_order",
+    );
+    return rows.map((row) => row.order_id);
+  }
+
+  const rows = await db.select<{ order_id: number }[]>(
+    "SELECT order_id FROM character_order WHERE character_id = $1",
+    [characterId],
+  );
+  return rows.map((row) => row.order_id);
+}
+
+/** 物品 → 所属市场分类名（来自 SDE 导入的 market_type + market_group） */
+export async function getTypeGroupNameMap(): Promise<Record<number, string>> {
+  const db = await getDb();
+  const rows = await db.select<{ type_id: number; name: string }[]>(
+    `SELECT mt.type_id, mg.name
+       FROM market_type mt
+       JOIN market_group mg ON mg.market_group_id = mt.market_group_id`,
+  );
+
+  const map: Record<number, string> = {};
+  for (const row of rows) {
+    map[row.type_id] = row.name;
+  }
+  return map;
 }

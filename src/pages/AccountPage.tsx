@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, RefreshCw, Search } from "lucide-react";
+import { RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -19,11 +19,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -32,7 +27,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Item, ItemActions, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -47,11 +41,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import {
   getCharacterScopes,
-  type AssetGroup,
+  getTypeGroupNameMap,
   type AssetsPayload,
   type EveCharacter,
 } from "@/lib/db";
 import { describeError, useCharacters } from "@/hooks/useCharacters";
+import {
+  LOCATION_KIND_LABEL,
+  formatLocationFlag,
+} from "@/lib/location-flags";
 import { useUiStore, type AccountTab } from "@/stores/ui-store";
 import { cn } from "@/lib/utils";
 
@@ -87,11 +85,23 @@ const KEY_SCOPES: { scope: string; purpose: string }[] = [
   },
 ];
 
-const LOCATION_KIND_LABEL: Record<string, string> = {
-  structure: "玩家建筑",
-  station: "NPC 空间站",
-  system: "太空",
-};
+
+/** 每页展示的物品条数 */
+const ASSET_PAGE_SIZE = 50;
+
+/** 拍平后的一行物品（带所属位置） */
+interface AssetRow {
+  typeId: number;
+  typeName: string | null;
+  quantity: number;
+  locationFlag: string;
+  isBlueprintCopy: boolean;
+  locationId: number;
+  locationName: string;
+  locationKind: string;
+  /** 该位置下所有物品的总件数 */
+  locationTotal: number;
+}
 
 /**
  * 授权等待的分阶段提示。
@@ -347,6 +357,9 @@ export default function AccountPage() {
 
 function AssetsPanel({ characterId }: { characterId: number | null }) {
   const [keyword, setKeyword] = useState("");
+  const [page, setPage] = useState(0);
+  /** 位置过滤：null 表示全部位置 */
+  const [locationFilter, setLocationFilter] = useState<number | null>(null);
 
   const query = useQuery({
     queryKey: ["assets", characterId],
@@ -356,32 +369,98 @@ function AssetsPanel({ characterId }: { characterId: number | null }) {
     staleTime: 60_000,
   });
 
-  // 按物品名 / 类型 ID 过滤，只保留有匹配项的分组
-  const filteredGroups = useMemo(() => {
-    const all = query.data?.groups ?? [];
+  // 物品所属市场分类（本地 SDE 数据，一次加载长期缓存）
+  const groupNamesQuery = useQuery({
+    queryKey: ["type-group-names"],
+    queryFn: getTypeGroupNameMap,
+    staleTime: 5 * 60_000,
+  });
+
+  const groupNames = groupNamesQuery.data ?? {};
+
+  /** 把分组结构拍平成「一物一行」 */
+  const allRows = useMemo<AssetRow[]>(() => {
+    const groups = query.data?.groups ?? [];
+    const rows: AssetRow[] = [];
+
+    for (const group of groups) {
+      for (const item of group.items) {
+        rows.push({
+          typeId: item.typeId,
+          typeName: item.typeName,
+          quantity: item.quantity,
+          locationFlag: item.locationFlag,
+          isBlueprintCopy: item.isBlueprintCopy,
+          locationId: group.locationId,
+          locationName: group.locationName,
+          locationKind: group.locationKind,
+          locationTotal: group.totalQuantity,
+        });
+      }
+    }
+
+    return rows;
+  }, [query.data]);
+
+  /** 可选位置（去重，按名称排序） */
+  const locations = useMemo(() => {
+    const map = new Map<number, { id: number; name: string; kind: string }>();
+
+    for (const row of allRows) {
+      if (!map.has(row.locationId)) {
+        map.set(row.locationId, {
+          id: row.locationId,
+          name: row.locationName,
+          kind: row.locationKind,
+        });
+      }
+    }
+
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  }, [allRows]);
+
+  const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    if (!kw) return all;
 
-    return all
-      .map((group) => ({
-        ...group,
-        items: group.items.filter(
-          (item) =>
-            (item.typeName ?? "").toLowerCase().includes(kw) ||
-            String(item.typeId).includes(kw),
-        ),
-      }))
-      .filter((group) => group.items.length > 0);
-  }, [query.data, keyword]);
+    return allRows.filter((row) => {
+      if (locationFilter !== null && row.locationId !== locationFilter) {
+        return false;
+      }
+      if (!kw) return true;
 
-  const searching = keyword.trim().length > 0;
+      return (
+        (row.typeName ?? "").toLowerCase().includes(kw) ||
+        String(row.typeId).includes(kw) ||
+        row.locationName.toLowerCase().includes(kw)
+      );
+    });
+  }, [allRows, keyword, locationFilter]);
+
+  // 过滤条件变化时回到第一页
+  useEffect(() => {
+    setPage(0);
+  }, [keyword, characterId, locationFilter]);
+
+  // 切换角色时清空位置过滤，避免残留上一个角色的选择
+  useEffect(() => {
+    setLocationFilter(null);
+  }, [characterId]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ASSET_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageRows = filtered.slice(
+    safePage * ASSET_PAGE_SIZE,
+    (safePage + 1) * ASSET_PAGE_SIZE,
+  );
 
   if (characterId === null) {
     return (
       <Empty>
         <EmptyHeader>
           <EmptyTitle>需要先授权角色</EmptyTitle>
-          <EmptyDescription>在「角色」标签页添加 EVE 角色后即可查看资产。</EmptyDescription>
+          <EmptyDescription>
+            在「角色」标签页添加 EVE 角色后即可查看资产。
+          </EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -390,40 +469,28 @@ function AssetsPanel({ characterId }: { characterId: number | null }) {
   if (query.isPending) {
     return (
       <div className="flex flex-col gap-2">
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="h-16 w-full" />
+        {Array.from({ length: 6 }).map((_, index) => (
+          <Skeleton key={index} className="h-9 w-full" />
+        ))}
       </div>
     );
   }
 
-  if (query.error) {
+  if (query.isError) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>资产加载失败</AlertTitle>
+        <AlertTitle>获取资产失败</AlertTitle>
         <AlertDescription>{describeError(query.error)}</AlertDescription>
       </Alert>
     );
   }
 
   const data = query.data;
-  if (!data || data.groups.length === 0) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>没有资产</EmptyTitle>
-          <EmptyDescription>
-            该角色的资产列表为空，或授权缺少资产读取权限。
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
 
   return (
-    <div>
+    <div className="flex flex-col gap-3">
       {data.truncated && (
-        <Alert className="mb-3">
+        <Alert>
           <AlertTitle>资产数量超过上限</AlertTitle>
           <AlertDescription>
             仅拉取了前 5 万条资产，部分物品可能没有显示。
@@ -431,32 +498,36 @@ function AssetsPanel({ characterId }: { characterId: number | null }) {
         </Alert>
       )}
 
-      {data.corporationNote && (
-        <Alert className="mb-3">
-          <AlertTitle>军团资产未加载</AlertTitle>
-          <AlertDescription>{data.corporationNote}</AlertDescription>
-        </Alert>
-      )}
-
-      <div className="mb-3 flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="relative max-w-xs flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="按物品名称或类型 ID 搜索"
+            placeholder="按物品名称、类型 ID 或位置搜索"
             className="pl-8"
           />
         </div>
 
+        <select
+          className="h-9 max-w-56 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+          value={locationFilter ?? ""}
+          onChange={(event) =>
+            setLocationFilter(Number(event.target.value) || null)
+          }
+        >
+          <option value="">全部位置（{locations.length}）</option>
+          {locations.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+
         <span className="text-sm text-muted-foreground">
-          {searching
-            ? `匹配 ${filteredGroups.length} 个位置`
-            : `个人 ${data.assetCount.toLocaleString()} 条${
-                data.corporationAssetCount > 0
-                  ? ` · 军团 ${data.corporationAssetCount.toLocaleString()} 条`
-                  : ""
-              }，分布在 ${data.groups.length} 个位置`}
+          {keyword.trim() || locationFilter !== null
+            ? `匹配 ${filtered.length.toLocaleString()} 条`
+            : `共 ${data.assetCount.toLocaleString()} 条物品，分布在 ${data.groups.length} 个位置`}
         </span>
 
         <Button
@@ -471,7 +542,7 @@ function AssetsPanel({ characterId }: { characterId: number | null }) {
         </Button>
       </div>
 
-      {filteredGroups.length === 0 ? (
+      {filtered.length === 0 ? (
         <Empty>
           <EmptyHeader>
             <EmptyTitle>没有匹配的物品</EmptyTitle>
@@ -479,108 +550,98 @@ function AssetsPanel({ characterId }: { characterId: number | null }) {
           </EmptyHeader>
         </Empty>
       ) : (
-        <div className="flex flex-col gap-2">
-          {filteredGroups.map((group) => (
-            <AssetGroupCard
-              key={group.locationId}
-              group={group}
-              forceOpen={searching}
-            />
-          ))}
-        </div>
+        <>
+          <div className="overflow-hidden rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>物品</TableHead>
+                  <TableHead>分类</TableHead>
+                  <TableHead className="text-right">数量</TableHead>
+                  <TableHead>位置</TableHead>
+                  <TableHead className="text-right">位置总量</TableHead>
+                  <TableHead>槽位</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pageRows.map((row) => (
+                  <TableRow
+                    key={`${row.locationId}-${row.typeId}-${row.locationFlag}-${row.isBlueprintCopy}`}
+                  >
+                    <TableCell>
+                      <span className="flex items-center gap-2">
+                        <span className="min-w-0 truncate">
+                          {row.typeName ?? `#${row.typeId}`}
+                        </span>
+                        {row.isBlueprintCopy && (
+                          <Badge variant="outline" className="shrink-0 text-[10px]">
+                            蓝图拷贝
+                          </Badge>
+                        )}
+                      </span>
+                      <span className="block font-mono text-[10px] text-muted-foreground/60">
+                        {row.typeId}
+                      </span>
+                    </TableCell>
+
+                    <TableCell className="max-w-40 truncate text-muted-foreground">
+                      {groupNames[row.typeId] ?? "—"}
+                    </TableCell>
+
+                    <TableCell className="text-right tabular-nums">
+                      {row.quantity.toLocaleString()}
+                    </TableCell>
+
+                    <TableCell className="max-w-56">
+                      <span className="block truncate">{row.locationName}</span>
+                      <span className="block font-mono text-[10px] text-muted-foreground/60">
+                        {LOCATION_KIND_LABEL[row.locationKind] ?? row.locationKind}
+                        {row.locationId >= 1_000_000_000_000
+                          ? ` · ${row.locationId}`
+                          : ""}
+                      </span>
+                    </TableCell>
+
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {row.locationTotal.toLocaleString()}
+                    </TableCell>
+
+                    <TableCell className="font-mono text-[11px] text-muted-foreground">
+                      {formatLocationFlag(row.locationFlag)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+            <span className="tabular-nums">
+              第 {safePage + 1} / {totalPages} 页 · 共{" "}
+              {filtered.length.toLocaleString()} 条
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage === 0}
+              onClick={() => setPage((value) => Math.max(0, value - 1))}
+            >
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={safePage >= totalPages - 1}
+              onClick={() =>
+                setPage((value) => Math.min(totalPages - 1, value + 1))
+              }
+            >
+              下一页
+            </Button>
+          </div>
+        </>
       )}
     </div>
-  );
-}
-
-function AssetGroupCard({
-  group,
-  forceOpen = false,
-}: {
-  group: AssetGroup;
-  forceOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(forceOpen);
-
-  // 搜索时自动展开命中的分组，省去逐个点开
-  useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="overflow-hidden rounded-lg border border-border bg-card/60">
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
-          >
-            <div className="min-w-0">
-              <span className="block text-sm text-foreground">
-                {group.locationName}
-              </span>
-              <span className="block font-mono text-[11px] text-muted-foreground">
-                {group.locationId} · {group.items.length} 种物品 · 共{" "}
-                {group.totalQuantity.toLocaleString()} 件
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Badge variant="outline">
-                {LOCATION_KIND_LABEL[group.locationKind] ?? group.locationKind}
-              </Badge>
-              <ChevronDown
-                className={cn(
-                  "size-4 text-muted-foreground transition-transform",
-                  open && "rotate-180",
-                )}
-              />
-            </div>
-          </button>
-        </CollapsibleTrigger>
-
-        <CollapsibleContent>
-          <Separator />
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>物品</TableHead>
-                <TableHead className="text-right">数量</TableHead>
-                <TableHead>槽位</TableHead>
-                <TableHead className="text-right">来源</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {group.items.map((item, index) => (
-                <TableRow key={`${item.source}-${item.typeId}-${item.locationFlag}-${index}`}>
-                  <TableCell>
-                    <span className="flex items-center gap-2">
-                      {item.typeName ?? `#${item.typeId}`}
-                      {item.isBlueprintCopy && (
-                        <Badge variant="outline">蓝图拷贝</Badge>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {item.quantity.toLocaleString()}
-                  </TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">
-                    {item.locationFlag}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Badge
-                      variant={item.source === "corporation" ? "secondary" : "outline"}
-                      className="text-[11px]"
-                    >
-                      {item.source === "corporation" ? "军团" : "个人"}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CollapsibleContent>
-      </div>
-    </Collapsible>
   );
 }
 
