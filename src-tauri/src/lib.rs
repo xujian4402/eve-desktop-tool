@@ -57,6 +57,12 @@ pub fn run() {
             sql: include_str!("../migrations/0006_market_type.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "pi_stock",
+            sql: include_str!("../migrations/0007_pi_stock.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -108,6 +114,7 @@ pub fn run() {
             esi::sync_character_orders,
             esi::sync_character_structures,
             esi::fetch_character_assets,
+            esi::fetch_character_asset_totals,
             esi::fetch_region_type_orders,
             esi::sync_market_groups,
             esi::seed_market_groups,

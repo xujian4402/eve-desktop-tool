@@ -736,6 +736,48 @@ pub struct AssetsPayload {
     pub truncated: bool,
 }
 
+/// 资产按物品类型的汇总，供「行星工业合成」等只需要数量的界面使用。
+///
+/// 完整资产列表可能上万条、按位置分组后体积很大；这里在 Rust 侧直接聚合成
+/// type_id → 总数量，传输量小两个数量级。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetTotals {
+    /// type_id → 总数量
+    pub totals: HashMap<i64, i64>,
+    pub asset_count: usize,
+    pub truncated: bool,
+}
+
+/// 拉取角色资产并按物品类型汇总数量。
+#[tauri::command]
+pub async fn fetch_character_asset_totals(
+    character_id: i64,
+    pool: tauri::State<'_, SqlitePool>,
+) -> Result<AssetTotals, String> {
+    let token = ensure_token(pool.inner(), character_id).await?;
+    let (assets, truncated) = fetch_character_asset_pages(character_id, &token).await?;
+
+    let mut totals: HashMap<i64, i64> = HashMap::new();
+    for asset in &assets {
+        // 已组装/单个物品的 quantity 可能是 -1，按 1 计
+        let quantity = if asset.is_singleton {
+            1
+        } else {
+            asset.quantity.max(0)
+        };
+        if quantity > 0 {
+            *totals.entry(asset.type_id).or_insert(0) += quantity;
+        }
+    }
+
+    Ok(AssetTotals {
+        totals,
+        asset_count: assets.len(),
+        truncated,
+    })
+}
+
 /// 批量解析 ID → 名称。单批失败只丢该批，不影响整体。
 /// 批量解析名称：本地 eve_type 的中文名优先，缺失的再走 ESI。
 ///

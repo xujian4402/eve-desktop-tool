@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Search } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -72,6 +73,151 @@ function formatIskShort(value: number): string {
   return value.toFixed(0);
 }
 
+/* ============================================================
+   排序 / 查询
+   ============================================================ */
+
+/** 可排序的列 */
+type OrderSortKey =
+  | "price"
+  | "competition"
+  | "volume"
+  | "range"
+  | "location"
+  | "expiry";
+
+interface OrderSort {
+  key: OrderSortKey;
+  desc: boolean;
+}
+
+/** 挂单范围换算成可比较的数值（数字表示跳跃数，region 视为最大） */
+function rangeSortValue(range: string): number {
+  if (/^\d+$/.test(range)) return Number(range);
+  if (range === "station") return 0;
+  if (range === "solar_system") return 1;
+  if (range === "region") return 1000;
+  return 500;
+}
+
+/**
+ * 相对同建筑最优价的优势值（越大越有利）。
+ * 买单高于最优买价、卖单低于最优卖价都算优势，用于「市场」列排序。
+ */
+function competitionAdvantage(
+  order: CharacterOrderView,
+  info: OrderMarketPrice | undefined,
+): number | null {
+  if (!info) return null;
+
+  if (order.is_buy_order) {
+    if (info.best_buy === null) return null;
+    return order.price - info.best_buy;
+  }
+
+  if (info.best_sell === null) return null;
+  return info.best_sell - order.price;
+}
+
+function orderSortValue(
+  order: CharacterOrderView,
+  key: OrderSortKey,
+  prices: Record<string, OrderMarketPrice>,
+): number | string {
+  switch (key) {
+    case "price":
+      return order.price;
+    case "volume":
+      return order.volume_remain;
+    case "range":
+      return rangeSortValue(order.range);
+    case "expiry":
+      return order.issued_at + order.duration * 86_400_000;
+    case "location":
+      return (order.location_name ?? `#${order.location_id}`).toLowerCase();
+    case "competition":
+      return (
+        competitionAdvantage(
+          order,
+          prices[`${order.location_id}:${order.type_id}`],
+        ) ?? Number.NEGATIVE_INFINITY
+      );
+  }
+}
+
+/** 按关键字过滤 + 按选定列排序（不改动原数组） */
+function applyOrdersView(
+  orders: CharacterOrderView[],
+  keyword: string,
+  sort: OrderSort | null,
+  prices: Record<string, OrderMarketPrice>,
+): CharacterOrderView[] {
+  const kw = keyword.trim().toLowerCase();
+
+  const filtered = kw
+    ? orders.filter(
+        (order) =>
+          (order.type_name ?? "").toLowerCase().includes(kw) ||
+          String(order.type_id).includes(kw),
+      )
+    : orders;
+
+  if (!sort) return filtered;
+
+  const dir = sort.desc ? -1 : 1;
+
+  return [...filtered].sort((a, b) => {
+    const va = orderSortValue(a, sort.key, prices);
+    const vb = orderSortValue(b, sort.key, prices);
+
+    if (typeof va === "string" || typeof vb === "string") {
+      return dir * String(va).localeCompare(String(vb), "zh-CN");
+    }
+
+    return dir * (va - vb);
+  });
+}
+
+/** 可点击排序的表头 */
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onToggle,
+  className,
+}: {
+  label: string;
+  sortKey: OrderSortKey;
+  sort: OrderSort | null;
+  onToggle: (key: OrderSortKey) => void;
+  className?: string;
+}) {
+  const active = sort?.key === sortKey;
+  const Icon = !active ? ArrowUpDown : sort?.desc ? ArrowDown : ArrowUp;
+
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onToggle(sortKey)}
+        title={`按「${label}」排序`}
+        className={cn(
+          "inline-flex items-center gap-1 transition-colors hover:text-foreground",
+          active && "text-cyan-300",
+        )}
+      >
+        {label}
+        <Icon
+          className={cn(
+            "size-3 shrink-0",
+            active ? "opacity-100" : "opacity-40",
+          )}
+        />
+      </button>
+    </TableHead>
+  );
+}
+
 export default function CharacterOrdersPanel({
   characters,
   activeCharacterId,
@@ -98,6 +244,19 @@ export default function CharacterOrdersPanel({
   const [error, setError] = useState<string | null>(null);
   /** 当前查看的角色 tab */
   const [activeTab, setActiveTab] = useState<string>("");
+  /** 物品名称/ID 查询：跨角色保留，方便对比同一件物品 */
+  const [keyword, setKeyword] = useState("");
+  /** 排序列：null 表示沿用后端的默认顺序 */
+  const [sort, setSort] = useState<OrderSort | null>(null);
+
+  /** 点击表头：升序 → 降序 → 取消排序 */
+  const toggleSort = (key: OrderSortKey) => {
+    setSort((current) => {
+      if (current?.key !== key) return { key, desc: false };
+      if (!current.desc) return { key, desc: true };
+      return null;
+    });
+  };
 
   const characterIds = characters.map((item) => item.character_id).join(",");
 
@@ -211,9 +370,9 @@ export default function CharacterOrdersPanel({
     <Tabs
       value={activeTab}
       onValueChange={setActiveTab}
-      className="flex flex-col gap-3"
+      className="min-h-0 flex-1 gap-3"
     >
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <TabsList className="gap-1.5">
           {characters.map((character) => {
             const count = ordersMap[character.character_id]?.length ?? 0;
@@ -249,19 +408,22 @@ export default function CharacterOrdersPanel({
       </div>
 
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="shrink-0">
           <AlertTitle>同步失败</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
       {characters.map((character) => {
-        const orders = ordersMap[character.character_id] ?? [];
+        const allOrders = ordersMap[character.character_id] ?? [];
         const stats = statsMap[character.character_id];
         const prices = priceMap[character.character_id] ?? {};
         const busy = syncingId === character.character_id;
+        /** 查询 + 排序后的可见订单 */
+        const orders = applyOrdersView(allOrders, keyword, sort, prices);
 
-        const expiring = orders.filter((order) => {
+        // 到期统计始终基于全量订单，不受查询/排序影响
+        const expiring = allOrders.filter((order) => {
           const expiresAt = order.issued_at + order.duration * 86_400_000;
           return expiresAt - Date.now() < 3 * 86_400_000;
         }).length;
@@ -270,13 +432,25 @@ export default function CharacterOrdersPanel({
           <TabsContent
             key={character.character_id}
             value={String(character.character_id)}
-            className="mt-0"
+            className="mt-0 flex min-h-0 flex-col data-[state=inactive]:hidden"
           >
-            <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <span className="text-xs text-muted-foreground">
-                  {orders.length} 笔挂单
+                  {keyword.trim() || sort
+                    ? `匹配 ${orders.length.toLocaleString()} / 共 ${allOrders.length.toLocaleString()} 笔`
+                    : `${allOrders.length} 笔挂单`}
                 </span>
+
+                <div className="relative w-56">
+                  <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={keyword}
+                    onChange={(event) => setKeyword(event.target.value)}
+                    placeholder="按物品名称或类型 ID 查询"
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -289,7 +463,7 @@ export default function CharacterOrdersPanel({
               </div>
 
               {stats && stats.order_count > 0 && (
-                <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-md border border-border/60 bg-background/40 px-3 py-1.5 text-[11px] text-muted-foreground">
+                <div className="flex shrink-0 flex-wrap gap-x-4 gap-y-1 rounded-md border border-border/60 bg-background/40 px-3 py-1.5 text-[11px] text-muted-foreground">
                   <span>
                     卖单价值{" "}
                     <b className="font-mono text-amber-300/90">
@@ -324,24 +498,56 @@ export default function CharacterOrdersPanel({
               )}
 
               {orders.length === 0 ? (
-                <p className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
-                  暂无订单，点右上角「同步该角色」拉取挂单。
+                <p className="flex flex-1 items-center justify-center rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
+                  {allOrders.length === 0
+                    ? "暂无订单，点右上角「同步该角色」拉取挂单。"
+                    : "没有匹配的订单，换个关键字试试。"}
                 </p>
               ) : (
-                <div className="max-h-96 overflow-auto rounded-lg border border-border">
+                <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border [&>[data-slot=table-container]]:overflow-visible">
                   <Table>
-                    <TableHeader>
+                    <TableHeader className="sticky top-0 z-10 bg-card">
                       <TableRow>
                         <TableHead>物品</TableHead>
                         <TableHead>方向</TableHead>
-                        <TableHead>单价 (ISK)</TableHead>
-                        <TableHead>市场</TableHead>
-                        <TableHead>剩余 / 总量</TableHead>
+                        <SortHeader
+                          label="单价 (ISK)"
+                          sortKey="price"
+                          sort={sort}
+                          onToggle={toggleSort}
+                        />
+                        <SortHeader
+                          label="市场"
+                          sortKey="competition"
+                          sort={sort}
+                          onToggle={toggleSort}
+                        />
+                        <SortHeader
+                          label="剩余 / 总量"
+                          sortKey="volume"
+                          sort={sort}
+                          onToggle={toggleSort}
+                        />
                         <TableHead>最小量</TableHead>
                         <TableHead>托管 (ISK)</TableHead>
-                        <TableHead>范围</TableHead>
-                        <TableHead>位置</TableHead>
-                        <TableHead>到期</TableHead>
+                        <SortHeader
+                          label="范围"
+                          sortKey="range"
+                          sort={sort}
+                          onToggle={toggleSort}
+                        />
+                        <SortHeader
+                          label="位置"
+                          sortKey="location"
+                          sort={sort}
+                          onToggle={toggleSort}
+                        />
+                        <SortHeader
+                          label="到期"
+                          sortKey="expiry"
+                          sort={sort}
+                          onToggle={toggleSort}
+                        />
                         <TableHead>归属</TableHead>
                       </TableRow>
                     </TableHeader>

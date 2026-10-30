@@ -174,13 +174,39 @@ export async function setActiveCharacter(characterId: number): Promise<void> {
   );
 }
 
-/** 解绑角色：删除钥匙串凭据 + 本地记录 */
+/**
+ * 解绑角色：删除钥匙串凭据 + 该角色在本地的全部数据。
+ *
+ * 除了 eve_character（eve_token 由外键 ON DELETE CASCADE 跟随删除），
+ * 还要清掉没有外键约束的业务数据：角色订单、同步任务、行星工业库存快照。
+ * 否则重新授权同一个角色后，旧订单/旧库存会当成最新数据继续显示。
+ */
 export async function removeCharacter(characterId: number): Promise<void> {
   await invoke("eve_logout", { characterId });
   const db = await getDb();
+
+  await db.execute("DELETE FROM character_order WHERE character_id = $1", [
+    characterId,
+  ]);
+  await db.execute("DELETE FROM sync_task WHERE character_id = $1", [
+    characterId,
+  ]);
+  await db.execute("DELETE FROM pi_stock WHERE character_id = $1", [
+    characterId,
+  ]);
   await db.execute("DELETE FROM eve_character WHERE character_id = $1", [
     characterId,
   ]);
+
+  // 一个角色都不剩时，把合并库存快照（character_id 为 NULL）与残留订单一并清掉
+  const remaining = await db.select<{ total: number }[]>(
+    "SELECT COUNT(*) AS total FROM eve_character",
+  );
+  if ((remaining[0]?.total ?? 0) === 0) {
+    await db.execute("DELETE FROM pi_stock", []);
+    await db.execute("DELETE FROM character_order", []);
+    await db.execute("DELETE FROM sync_task", []);
+  }
 }
 
 /** 读取某角色已获得的授权作用域 */
@@ -911,4 +937,59 @@ export async function listMyOrderIds(
  */
 export async function getTypeGroupNameMap(): Promise<Record<number, string>> {
   return invoke<Record<number, string>>("get_type_group_names");
+}
+
+/* ============================================================
+   行星工业库存快照（pi_stock）
+   ============================================================ */
+
+export interface PiStockSnapshotRow {
+  type_id: number;
+  quantity: number;
+  /** 最后一次读取该库存的角色 */
+  character_id: number | null;
+  updated_at: number;
+}
+
+/** 读取本地保存的行星工业库存（没有快照时返回空数组） */
+export async function loadPiStock(): Promise<PiStockSnapshotRow[]> {
+  const db = await getDb();
+  return db.select<PiStockSnapshotRow[]>(
+    "SELECT type_id, quantity, character_id, updated_at FROM pi_stock ORDER BY type_id",
+  );
+}
+
+/**
+ * 覆盖保存行星工业库存。
+ *
+ * 库存是「最近一次从 ESI 读取的快照」，因此整表替换而不是增量更新，
+ * 避免已消耗掉的物资一直留在表里。
+ */
+export async function savePiStock(
+  characterId: number | null,
+  entries: Array<{ typeId: number; quantity: number }>,
+): Promise<void> {
+  const db = await getDb();
+  const now = Date.now();
+
+  await db.execute("DELETE FROM pi_stock", []);
+
+  for (const batch of chunk(entries, 300)) {
+    const values: string[] = [];
+    const params: unknown[] = [];
+
+    batch.forEach((entry, index) => {
+      const base = index * 4;
+      values.push(
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`,
+      );
+      params.push(entry.typeId, entry.quantity, characterId, now);
+    });
+
+    await db.execute(
+      `INSERT INTO pi_stock (type_id, quantity, character_id, updated_at)
+       VALUES ${values.join(", ")}`,
+      params,
+    );
+  }
 }

@@ -252,9 +252,9 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
   }
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-[1400px] flex-col">
+    <div className="mx-auto flex min-h-0 w-full max-w-[1400px] flex-1 flex-col">
       {actionError && (
-        <Alert variant="destructive" className="mb-4">
+        <Alert variant="destructive" className="mb-4 shrink-0">
           <AlertTitle>操作失败</AlertTitle>
           <AlertDescription>{actionError}</AlertDescription>
         </Alert>
@@ -477,7 +477,11 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
           </div>
         </TabsContent>
 
-        <TabsContent value="orders" className="mt-4 min-h-0 flex-1 overflow-auto">
+        {/* 滚动交给面板内部的表格区，这里只做高度传递 */}
+        <TabsContent
+          value="orders"
+          className="mt-4 flex min-h-0 flex-col data-[state=inactive]:hidden"
+        >
           <CharacterOrdersPanel
             characters={characters}
             activeCharacterId={activeCharacterId}

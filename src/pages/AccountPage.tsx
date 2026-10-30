@@ -275,8 +275,8 @@ export default function AccountPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>解绑角色？</AlertDialogTitle>
             <AlertDialogDescription>
-              将删除「{pendingUnbind?.name ?? "该角色"}」在本机的授权凭据与角色记录。
-              之后如需使用，需要重新授权。
+              将删除「{pendingUnbind?.name ?? "该角色"}」在本机的授权凭据、角色记录，
+              以及该角色的订单、同步任务与行星工业库存等数据。之后如需使用，需要重新授权。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

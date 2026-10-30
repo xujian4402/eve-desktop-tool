@@ -1,6 +1,7 @@
 import { useState } from "react";
 import AccountPage from "./pages/AccountPage";
 import MarketPage from "./pages/MarketPage";
+import PlanetaryPage from "./pages/PlanetaryPage";
 import { Toaster } from "@/components/ui/sonner";
 import type { MenuKey } from "./lib/nav";
 import "./App.css";
@@ -12,12 +13,12 @@ interface MenuItem {
 }
 
 const MENUS: MenuItem[] = [
+  {
+    key: "planetary",
+    label: "行星工业",
+    description: "P0-P4 配方与收益、行星资源选址、主权升级预算。",
+  },
   // 暂未开放，先隐藏入口；代码保留，恢复时取消注释即可
-  // {
-  //   key: "planetary",
-  //   label: "行星工业",
-  //   description: "行星工业模块占位，后续在此展示殖民地、开采与产出规划。",
-  // },
   // {
   //   key: "manufacturing",
   //   label: "制造业",
@@ -46,13 +47,14 @@ const MENUS: MenuItem[] = [
 ];
 
 function App() {
-  // 默认停在「市场」：行星工业等入口暂时隐藏，不能再作为初始页
-  const [activeMenu, setActiveMenu] = useState<MenuKey>("market");
+  const [activeMenu, setActiveMenu] = useState<MenuKey>("planetary");
 
   const current = MENUS.find((menu) => menu.key === activeMenu) ?? MENUS[0];
 
   const renderContent = () => {
     switch (activeMenu) {
+      case "planetary":
+        return <PlanetaryPage />;
       case "market":
         return <MarketPage onNavigate={setActiveMenu} />;
       case "account":
@@ -89,7 +91,11 @@ function App() {
 
       <main
         className={
-          activeMenu === "account" ? "content content--fill" : "content"
+          activeMenu === "account" ||
+          activeMenu === "market" ||
+          activeMenu === "planetary"
+            ? "content content--fill"
+            : "content"
         }
       >
         {renderContent()}
