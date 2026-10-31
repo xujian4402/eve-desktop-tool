@@ -112,3 +112,60 @@ export function totalValue(
     0,
   );
 }
+
+export interface PiValueSplit {
+  /** 标记为「库存」的数量 × 单价 */
+  stockValue: number;
+  /** 标记为「购买」的数量 × 单价 */
+  buyValue: number;
+}
+
+/** 按来源拆分价值：库存价值 vs 待购买金额 */
+export function valueBySource(
+  items: PiInventoryItem[],
+  stock: Map<number, number>,
+  prices: Record<number, string>,
+  source: Record<number, PiStockSource>,
+): PiValueSplit {
+  let stockValue = 0;
+  let buyValue = 0;
+
+  for (const item of items) {
+    const quantity = stock.get(item.typeId) ?? 0;
+    const price = Number(prices[item.typeId]);
+    if (quantity <= 0 || !Number.isFinite(price) || price <= 0) continue;
+
+    const amount = quantity * price;
+    if ((source[item.typeId] ?? "buy") === "stock") {
+      stockValue += amount;
+    } else {
+      buyValue += amount;
+    }
+  }
+
+  return { stockValue, buyValue };
+}
+
+/** 某个等级的价值拆分 */
+export function groupValueBySource(
+  group: PiInventoryGroup,
+  stock: Map<number, number>,
+  prices: Record<number, string>,
+  source: Record<number, PiStockSource>,
+): PiValueSplit {
+  return valueBySource(group.items, stock, prices, source);
+}
+
+/** 全部等级的价值拆分 */
+export function totalValueBySource(
+  stock: Map<number, number>,
+  prices: Record<number, string>,
+  source: Record<number, PiStockSource>,
+): PiValueSplit {
+  return valueBySource(
+    PI_INVENTORY_GROUPS.flatMap((group) => group.items),
+    stock,
+    prices,
+    source,
+  );
+}

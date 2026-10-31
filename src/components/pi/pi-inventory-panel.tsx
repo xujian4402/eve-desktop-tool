@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  groupValue,
+  groupValueBySource,
   PI_INVENTORY_GROUPS,
   PI_MARKETS,
   piTierLabel,
-  totalValue,
+  totalValueBySource,
   type PiStockSource,
 } from "@/lib/pi/inventory";
 import { cn } from "@/lib/utils";
@@ -39,6 +39,7 @@ export function PiInventoryPanel({
   onSourceChange,
   onClearStock,
   onClearAllStock,
+  onBulkFill,
   onRefreshPrices,
   onFetchStock,
   fetchingPrices,
@@ -65,6 +66,8 @@ export function PiInventoryPanel({
   onClearStock: (typeIds: number[]) => void;
   /** 清除所有等级的库存数量 */
   onClearAllStock: () => void;
+  /** 把当前等级的全部物品数量设为同一个值 */
+  onBulkFill: (typeIds: number[], quantity: number) => void;
   onRefreshPrices: () => void;
   onFetchStock: () => void;
   fetchingPrices: boolean;
@@ -73,6 +76,8 @@ export function PiInventoryPanel({
   stockMessage: string | null;
 }) {
   const [tier, setTier] = useState<string>("0");
+  /** 一键录入用的数量（只作用于当前等级） */
+  const [bulkQuantity, setBulkQuantity] = useState("");
   const current =
     PI_INVENTORY_GROUPS.find((group) => String(group.tier) === tier) ??
     PI_INVENTORY_GROUPS[0];
@@ -128,13 +133,26 @@ export function PiInventoryPanel({
           {fetchingStock ? "读取中…" : "从 ESI 获取库存"}
         </Button>
 
-        <span className="text-xs text-muted-foreground">
-          库存估值{" "}
-          <b className="font-mono tabular-nums text-emerald-300/90">
-            {isk(totalValue(stock, prices))}
-          </b>{" "}
-          ISK
-        </span>
+        {(() => {
+          const split = totalValueBySource(stock, prices, source);
+          return (
+            <span className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+              <span>
+                库存价值{" "}
+                <b className="font-mono tabular-nums text-emerald-300/90">
+                  {isk(split.stockValue)}
+                </b>
+              </span>
+              <span>
+                待购买{" "}
+                <b className="font-mono tabular-nums text-amber-300/90">
+                  {isk(split.buyValue)}
+                </b>
+              </span>
+              <span className="text-muted-foreground/60">ISK</span>
+            </span>
+          );
+        })()}
 
         <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/80">
           {priceMessage ?? stockMessage ?? ""}
@@ -174,6 +192,31 @@ export function PiInventoryPanel({
             onClick={onClearAllStock}
           >
             全部清除
+          </Button>
+
+          <Input
+            value={bulkQuantity}
+            onChange={(event) => setBulkQuantity(event.target.value)}
+            inputMode="numeric"
+            placeholder="数量"
+            className="h-7 w-20 text-right text-[11px]"
+            title="一键录入的数量"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            disabled={!Number(bulkQuantity)}
+            title="把当前等级的所有物品数量设为这个值"
+            onClick={() => {
+              onBulkFill(
+                current.items.map((item) => item.typeId),
+                Number(bulkQuantity),
+              );
+              setBulkQuantity("");
+            }}
+          >
+            一键录入
           </Button>
         </div>
 
@@ -255,7 +298,7 @@ export function PiInventoryPanel({
                           onStockChange(item.typeId, event.target.value)
                         }
                         inputMode="numeric"
-                        placeholder="库存"
+                        placeholder="数量"
                         className="h-6 min-w-0 flex-1 px-1 text-right text-[11px]"
                       />
                     </div>
@@ -264,7 +307,10 @@ export function PiInventoryPanel({
                       <span className="font-mono text-muted-foreground/50">
                         {item.typeId}
                       </span>
-                      <span className="truncate font-mono tabular-nums text-muted-foreground">
+                      <span
+                        className="truncate font-mono tabular-nums text-muted-foreground"
+                        title="数量 × 单价（库存与计划购买都计入）"
+                      >
                         {value > 0 ? `${isk(value)} ISK` : "—"}
                       </span>
                     </div>
@@ -274,13 +320,28 @@ export function PiInventoryPanel({
             </div>
           </div>
 
-          <p className="mt-1 shrink-0 text-right text-[11px] text-muted-foreground/80">
-            {group.label} 估值{" "}
-            <b className="font-mono tabular-nums text-foreground/80">
-              {isk(groupValue(group, stock, prices))}
-            </b>{" "}
-            ISK · 共 {group.items.length} 项
-          </p>
+          {(() => {
+            const split = groupValueBySource(group, stock, prices, source);
+            return (
+              <p className="mt-1 flex shrink-0 flex-wrap items-center justify-end gap-x-3 text-[11px] text-muted-foreground/80">
+                <span>
+                  {group.label} 库存价值{" "}
+                  <b className="font-mono tabular-nums text-emerald-300/90">
+                    {isk(split.stockValue)}
+                  </b>
+                </span>
+                <span>
+                  待购买{" "}
+                  <b className="font-mono tabular-nums text-amber-300/90">
+                    {isk(split.buyValue)}
+                  </b>
+                </span>
+                <span className="text-muted-foreground/60">
+                  ISK · 共 {group.items.length} 项
+                </span>
+              </p>
+            );
+          })()}
         </TabsContent>
         ))}
       </Tabs>

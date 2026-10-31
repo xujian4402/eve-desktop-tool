@@ -192,6 +192,32 @@ export function PiSchematicsPanel() {
     }
   };
 
+  /** 一键录入：把当前等级的物品数量都设为同一个值（界面 + 本地库同步） */
+  const handleBulkFill = async (typeIds: number[], quantity: number) => {
+    if (!Number.isFinite(quantity) || quantity <= 0) return;
+
+    const value = Math.floor(quantity);
+    const next = new Map(stock);
+    for (const typeId of typeIds) next.set(typeId, value);
+
+    setStock(next);
+    setStockDraft((current) => {
+      const draft = { ...current };
+      for (const typeId of typeIds) delete draft[typeId];
+      return draft;
+    });
+
+    try {
+      await savePiStock(
+        activeCharacter?.character_id ?? null,
+        [...next].map(([typeId, quantity]) => ({ typeId, quantity })),
+      );
+      setStockMessage(`已将当前等级 ${typeIds.length} 项的数量设为 ${value}`);
+    } catch {
+      setStockMessage("已设置界面数量，但写入本地库失败");
+    }
+  };
+
   /** 清除所有等级的库存（界面 + 本地库同步） */
   const handleClearAllStock = async () => {
     setStock(new Map());
@@ -349,6 +375,7 @@ export function PiSchematicsPanel() {
         }
         onClearStock={(typeIds) => void handleClearStock(typeIds)}
         onClearAllStock={() => void handleClearAllStock()}
+        onBulkFill={(typeIds, quantity) => void handleBulkFill(typeIds, quantity)}
         onRefreshPrices={() => void handleRefreshPrices()}
         onFetchStock={() => void handleFetchStock()}
         fetchingPrices={fetchingPrices}
