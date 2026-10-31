@@ -749,6 +749,260 @@ pub struct AssetTotals {
     pub truncated: bool,
 }
 
+/// ESI 的殖民地条目（/characters/{id}/planets/）。
+///
+/// 全部字段用 Option 兜底：ESI 对个别字段可能返回 null，
+/// 而 `#[serde(default)]` 只处理「字段缺失」，遇到 null 仍会解码失败。
+#[derive(Debug, Deserialize)]
+struct EsiColony {
+    #[serde(default)]
+    planet_id: Option<i64>,
+    #[serde(default)]
+    solar_system_id: Option<i64>,
+    #[serde(default)]
+    type_id: Option<i64>,
+    #[serde(default)]
+    upgrade_level: Option<i64>,
+    #[serde(default)]
+    num_pins: Option<i64>,
+    #[serde(default)]
+    last_update: Option<String>,
+}
+
+/// 殖民地（行星工业菜地）视图
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColonyView {
+    pub planet_id: i64,
+    pub solar_system_id: i64,
+    /// 行星类型 ID（11 温和 / 12 冰体 / 13 气体 / 2014 海洋 / 2015 熔岩 / 2016 贫瘠 / 2017 风暴 / 2063 等离子）
+    pub planet_type_id: i64,
+    pub upgrade_level: i64,
+    pub num_pins: i64,
+    pub last_update: String,
+}
+
+/// 拉取角色已建立的行星殖民地。
+#[tauri::command]
+pub async fn fetch_character_colonies(
+    character_id: i64,
+    pool: tauri::State<'_, SqlitePool>,
+) -> Result<Vec<ColonyView>, String> {
+    let token = ensure_token(pool.inner(), character_id).await?;
+
+    let response = http()
+        .get(format!("{ESI_BASE}/characters/{character_id}/planets/"))
+        .query(&[("datasource", "tranquility")])
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("拉取行星殖民地失败：{e}"))?;
+
+    let status = response.status().as_u16();
+    match status {
+        200 => {}
+        403 => {
+            return Err(
+                "行星殖民地：该角色没有读取权限，请确认授权包含 esi-planets.manage_planets.v1"
+                    .to_string(),
+            )
+        }
+        404 => return Err("行星殖民地：目标不存在".to_string()),
+        420 | 429 => return Err(format!("拉取行星殖民地：{}", RATE_LIMIT_HINT)),
+        _ => return Err(format!("拉取行星殖民地失败（HTTP {status}）")),
+    }
+
+    // 先取文本再解析：解析失败时能把响应片段带回前端，便于定位字段变更
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("读取行星殖民地响应失败：{e}"))?;
+
+    let rows: Vec<EsiColony> = serde_json::from_str(&body).map_err(|e| {
+        let snippet: String = body.chars().take(240).collect();
+        format!("解析行星殖民地失败：{e}；响应片段：{snippet}")
+    })?;
+
+    // 字段名对不上时 serde 不会报错（Option 兜底），这里显式提示便于修正
+    if !rows.is_empty() && rows.iter().all(|row| row.planet_id.is_none()) {
+        let snippet: String = body.chars().take(240).collect();
+        return Err(format!(
+            "行星殖民地字段与预期不符（缺少 planet_id）；响应片段：{snippet}"
+        ));
+    }
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ColonyView {
+            planet_id: row.planet_id.unwrap_or(0),
+            solar_system_id: row.solar_system_id.unwrap_or(0),
+            planet_type_id: row.type_id.unwrap_or(0),
+            upgrade_level: row.upgrade_level.unwrap_or(0),
+            num_pins: row.num_pins.unwrap_or(0),
+            last_update: row.last_update.unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// 殖民地里的设施（pin）
+#[derive(Debug, Deserialize)]
+struct EsiPin {
+    #[serde(default)]
+    pin_id: Option<i64>,
+    #[serde(default)]
+    type_id: Option<i64>,
+    #[serde(default)]
+    last_cycle_start: Option<String>,
+    #[serde(default)]
+    expiry_time: Option<String>,
+    #[serde(default)]
+    contents: Vec<EsiPinContent>,
+    #[serde(default)]
+    extractor_details: Option<EsiExtractor>,
+    #[serde(default)]
+    factory_details: Option<EsiFactory>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EsiPinContent {
+    #[serde(default)]
+    amount: Option<i64>,
+    #[serde(default)]
+    type_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EsiExtractor {
+    #[serde(default)]
+    cycle_time: Option<i64>,
+    #[serde(default)]
+    product_type_id: Option<i64>,
+    #[serde(default)]
+    qty_per_cycle: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EsiFactory {
+    #[serde(default)]
+    schematic_id: Option<i64>,
+    #[serde(default)]
+    product_type_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EsiColonyDetail {
+    #[serde(default)]
+    pins: Vec<EsiPin>,
+}
+
+/// 设施详情视图
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColonyPinView {
+    pub pin_id: i64,
+    pub type_id: i64,
+    pub contents: Vec<ColonyPinContent>,
+    /// "extractor" | "factory" | "storage" | "other"
+    pub kind: String,
+    pub cycle_time: Option<i64>,
+    pub product_type_id: Option<i64>,
+    pub qty_per_cycle: Option<i64>,
+    pub schematic_id: Option<i64>,
+    pub expiry_time: Option<String>,
+    pub last_cycle_start: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColonyPinContent {
+    pub type_id: i64,
+    pub amount: i64,
+}
+
+/// 拉取某个行星殖民地的设施详情。
+#[tauri::command]
+pub async fn fetch_colony_detail(
+    character_id: i64,
+    planet_id: i64,
+    pool: tauri::State<'_, SqlitePool>,
+) -> Result<Vec<ColonyPinView>, String> {
+    let token = ensure_token(pool.inner(), character_id).await?;
+
+    let response = http()
+        .get(format!(
+            "{ESI_BASE}/characters/{character_id}/planets/{planet_id}/"
+        ))
+        .query(&[("datasource", "tranquility")])
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("拉取殖民地面板失败：{e}"))?;
+
+    let status = response.status().as_u16();
+    match status {
+        200 => {}
+        403 => {
+            return Err(
+                "殖民地面板：该角色没有读取权限，请确认授权包含 esi-planets.manage_planets.v1"
+                    .to_string(),
+            )
+        }
+        404 => return Err("殖民地面板：目标不存在".to_string()),
+        420 | 429 => return Err(format!("拉取殖民地面板：{}", RATE_LIMIT_HINT)),
+        _ => return Err(format!("拉取殖民地面板失败（HTTP {status}）")),
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("读取殖民地面板响应失败：{e}"))?;
+
+    let detail: EsiColonyDetail = serde_json::from_str(&body).map_err(|e| {
+        let snippet: String = body.chars().take(240).collect();
+        format!("解析殖民地面板失败：{e}；响应片段：{snippet}")
+    })?;
+
+    Ok(detail
+        .pins
+        .into_iter()
+        .map(|pin| {
+            let kind = if pin.extractor_details.is_some() {
+                "extractor"
+            } else if pin.factory_details.is_some() {
+                "factory"
+            } else if !pin.contents.is_empty() {
+                "storage"
+            } else {
+                "other"
+            };
+
+            ColonyPinView {
+                pin_id: pin.pin_id.unwrap_or(0),
+                type_id: pin.type_id.unwrap_or(0),
+                contents: pin
+                    .contents
+                    .into_iter()
+                    .map(|item| ColonyPinContent {
+                        type_id: item.type_id.unwrap_or(0),
+                        amount: item.amount.unwrap_or(0),
+                    })
+                    .collect(),
+                kind: kind.to_string(),
+                cycle_time: pin.extractor_details.as_ref().and_then(|d| d.cycle_time),
+                product_type_id: pin
+                    .extractor_details
+                    .as_ref()
+                    .and_then(|d| d.product_type_id)
+                    .or_else(|| pin.factory_details.as_ref().and_then(|d| d.product_type_id)),
+                qty_per_cycle: pin.extractor_details.as_ref().and_then(|d| d.qty_per_cycle),
+                schematic_id: pin.factory_details.as_ref().and_then(|d| d.schematic_id),
+                expiry_time: pin.expiry_time,
+                last_cycle_start: pin.last_cycle_start,
+            }
+        })
+        .collect())
+}
+
 /// 拉取角色资产并按物品类型汇总数量。
 #[tauri::command]
 pub async fn fetch_character_asset_totals(

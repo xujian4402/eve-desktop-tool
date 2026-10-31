@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   loadPiSystems,
   PI_PRODUCTS,
@@ -27,6 +28,8 @@ import {
   type PiSystemPlanets,
 } from "@/lib/pi/data";
 import {
+  facilitiesOfPlanet,
+  p0TypeIdsOfPlanet,
   PI_PLANET_TYPES,
   PLANET_FACILITY_HINT,
   planetTypesOfP0,
@@ -38,7 +41,7 @@ import {
   p0Coverage,
   securityTone,
 } from "@/lib/pi/systems";
-import type { PiChainPlan, PiPlanetType } from "@/lib/pi/types";
+import type { PiChainPlan, PiPlanetType, PiTier } from "@/lib/pi/types";
 import { cn } from "@/lib/utils";
 
 /** 安全等级配色 */
@@ -174,6 +177,192 @@ export function PiPlanPanel() {
       return [...current, id];
     });
   };
+
+  /** 最低行星标准：跑完所选产物至少需要怎样的行星配置 */
+  const minimalStandard = useMemo(() => {
+    // 1. 加工所需设施 → 适用等级
+    const facilityTiers = new Map<string, Set<PiTier>>();
+    for (const plan of plans) {
+      for (const step of plan.steps) {
+        const set = facilityTiers.get(step.facility) ?? new Set<PiTier>();
+        set.add(step.tier);
+        facilityTiers.set(step.facility, set);
+      }
+    }
+
+    // 2. 每种设施能被哪些行星承载
+    const facilityPlanets = new Map<string, string[]>();
+    for (const facility of facilityTiers.keys()) {
+      facilityPlanets.set(
+        facility,
+        PI_PLANET_TYPES.filter((planet) =>
+          (facilitiesOfPlanet(planet) as string[]).includes(facility),
+        ),
+      );
+    }
+
+    // 3. 采集所需行星类型（P0 → 行星类型的并集）
+    const harvestTypes = new Set<string>();
+    for (const [typeId] of summary.p0) {
+      for (const planet of planetTypesOfP0(typeId)) harvestTypes.add(planet);
+    }
+
+    // 4. 加工行星与采集行星能否合并：只要有一颗贫瘠/温和就能跑全部加工档位
+    const fabricationPlanets = new Set<string>();
+    for (const list of facilityPlanets.values()) {
+      for (const planet of list) fabricationPlanets.add(planet);
+    }
+    const extraHarvest = [...harvestTypes].filter(
+      (planet) => !fabricationPlanets.has(planet),
+    );
+
+    const fabricationCount = facilityTiers.size > 0 ? 1 : 0;
+
+    return {
+      facilityTiers: [...facilityTiers].map(([facility, tiers]) => ({
+        facility,
+        tiers: [...tiers].sort(),
+        planets: facilityPlanets.get(facility) ?? [],
+      })),
+      harvestTypes: [...harvestTypes],
+      extraHarvest,
+      fabricationCount,
+      total: fabricationCount + extraHarvest.length,
+    };
+  }, [plans, summary.p0]);
+
+  /** 具体部署清单：几颗行星、每颗装什么、采什么、加工什么 */
+  const deployment = useMemo(() => {
+    const facilitiesNeeded = minimalStandard.facilityTiers.map(
+      (item) => item.facility,
+    );
+
+    // 能装下全部所需设施的行星（只考虑已选产物实际用到的设施）
+    const fabCandidates = PI_PLANET_TYPES.filter((planet) =>
+      facilitiesNeeded.every((facility) =>
+        (facilitiesOfPlanet(planet) as string[]).includes(facility),
+      ),
+    );
+
+    // 需求 P0（typeId → 每小时需求）
+    const p0Demand = new Map<number, { name: string; quantity: number }>();
+    for (const [typeId, item] of summary.p0) {
+      p0Demand.set(typeId, { name: item.name, quantity: item.quantity });
+    }
+
+    /** 某行星能采到本次需要的哪些 P0 */
+    const harvestOf = (planet: string) =>
+      p0TypeIdsOfPlanet(planet)
+        .filter((typeId) => p0Demand.has(typeId))
+        .map((typeId) => ({ typeId, ...p0Demand.get(typeId)! }))
+        .sort((a, b) => b.quantity - a.quantity);
+
+    /** 某行星的设施能加工哪些产物 */
+    const processOf = (planet: string) => {
+      const facilities = facilitiesOfPlanet(planet) as string[];
+      const names = new Set<string>();
+      for (const plan of plans) {
+        for (const step of plan.steps) {
+          if (facilities.includes(step.facility)) {
+            names.add(`P${step.tier} ${step.name}`);
+          }
+        }
+      }
+      return [...names];
+    };
+
+    // 加工行星推荐：优先选能顺带采到更多 P0 的那颗
+    const ranked = fabCandidates
+      .map((planet) => ({ planet, p0: harvestOf(planet) }))
+      .sort(
+        (a, b) => b.p0.length - a.p0.length || b.p0.reduce((s, i) => s + i.quantity, 0) - a.p0.reduce((s, i) => s + i.quantity, 0),
+      );
+
+    // 采集行星：需要的行星类型里，不能由加工行星覆盖的
+    const harvestOnly = minimalStandard.harvestTypes.filter(
+      (planet) => !fabCandidates.includes(planet as PiPlanetType),
+    );
+
+    // 所有部署行星覆盖到的 P0（用于检查是否还有缺口）
+    const covered = new Set<number>();
+    if (ranked[0]) ranked[0].p0.forEach((item) => covered.add(item.typeId));
+    const harvestOnlyDetail = harvestOnly.map((planet) => ({
+      planet,
+      p0: harvestOf(planet),
+    }));
+    for (const item of harvestOnlyDetail) {
+      item.p0.forEach((p0) => covered.add(p0.typeId));
+    }
+
+    const uncovered = [...p0Demand]
+      .filter(([typeId]) => !covered.has(typeId))
+      .map(([typeId, item]) => ({ typeId, ...item }));
+
+    return {
+      ranked,
+      harvestOnlyDetail,
+      uncovered,
+      processOf,
+      total: (ranked.length > 0 ? 1 : 0) + harvestOnlyDetail.length,
+    };
+  }, [minimalStandard, summary.p0, plans]);
+
+  /**
+   * 一星一产物：每颗行星只采集 1 种 P0。
+   *
+   * 因此所需 P0 有几种，就至少要几颗采集行星；其中一颗可由加工行星兼任
+   * （它一边跑产线，一边采那一种 P0）。
+   */
+  const routes = useMemo(() => {
+    const facilitiesNeeded = minimalStandard.facilityTiers.map(
+      (item) => item.facility,
+    );
+    const fabCandidates = PI_PLANET_TYPES.filter((planet) =>
+      facilitiesNeeded.every((facility) =>
+        (facilitiesOfPlanet(planet) as string[]).includes(facility),
+      ),
+    );
+    const fabPlanet = fabCandidates[0] ?? null;
+
+    const rows = summary.p0.map(([typeId, item]) => {
+      const planets = planetTypesOfP0(typeId);
+      const preferred =
+        fabPlanet && planets.includes(fabPlanet)
+          ? fabPlanet
+          : (planets[0] ?? null);
+      return {
+        typeId,
+        name: item.name,
+        quantity: item.quantity,
+        planets,
+        preferred,
+      };
+    });
+
+    // 加工行星顺带采集的那一项（推荐分配落在加工行星上的第一种 P0）
+    const fabHarvest = fabPlanet
+      ? (rows.find((row) => row.preferred === fabPlanet) ?? null)
+      : null;
+
+    const harvestPlanetCount = rows.length - (fabHarvest ? 1 : 0);
+    const total = harvestPlanetCount + (fabPlanet ? 1 : 0);
+
+    // 组合数：每种 P0 可选行星类型的数量相乘
+    const combinations = rows.reduce(
+      (acc, row) => acc * Math.max(1, row.planets.length),
+      1,
+    );
+
+    return {
+      rows,
+      fabPlanet,
+      fabCandidates,
+      fabHarvest,
+      harvestPlanetCount,
+      total,
+      combinations,
+    };
+  }, [summary.p0, minimalStandard]);
 
   const groups = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -470,46 +659,249 @@ export function PiPlanPanel() {
               </section>
 
               <section className={cn(plans.length === 0 && "hidden")}>
-                <h3 className="mb-2 text-sm font-medium text-foreground/85">
-                  行星分工
-                </h3>
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-                  {PI_PLANET_TYPES.filter(
-                    (planet) =>
-                      summary.harvest.has(planet) || summary.process.has(planet),
-                  ).map((planet) => {
-                    const harvestIds = [...(summary.harvest.get(planet) ?? [])];
-                    const processNames = [...(summary.process.get(planet) ?? [])];
-                    return (
-                      <div
-                        key={planet}
-                        className="rounded-lg border border-border/60 bg-card/40 p-2.5 text-xs"
-                      >
-                        <div className="mb-1 flex items-center gap-2">
+                <Tabs defaultValue="split" className="min-h-0">
+                  <div className="mb-2 flex flex-wrap items-center gap-3">
+                    <h3 className="text-sm font-medium text-foreground/85">
+                      行星分工
+                    </h3>
+                    <TabsList className="h-7">
+                      <TabsTrigger value="split" className="text-[11px]">
+                        分工明细
+                      </TabsTrigger>
+                      <TabsTrigger value="minimal" className="text-[11px]">
+                        最低行星标准
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+
+                  <TabsContent
+                    value="split"
+                    className="data-[state=inactive]:hidden"
+                  >
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {PI_PLANET_TYPES.filter(
+                        (planet) =>
+                          summary.harvest.has(planet) ||
+                          summary.process.has(planet),
+                      ).map((planet) => {
+                        const harvestIds = [
+                          ...(summary.harvest.get(planet) ?? []),
+                        ];
+                        const processNames = [
+                          ...(summary.process.get(planet) ?? []),
+                        ];
+                        return (
+                          <div
+                            key={planet}
+                            className="rounded-lg border border-border/60 bg-card/40 p-2.5 text-xs"
+                          >
+                            <div className="mb-1 flex items-center gap-2">
+                              <span className="font-medium text-foreground/90">
+                                {planet}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground/70">
+                                {PLANET_FACILITY_HINT[planet as PiPlanetType]}
+                              </span>
+                            </div>
+                            <p className="text-muted-foreground">
+                              采集：
+                              {harvestIds
+                                .map(
+                                  (typeId) =>
+                                    summary.p0.find(([id]) => id === typeId)?.[1]
+                                      .name ?? `#${typeId}`,
+                                )
+                                .join("、") || "—"}
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              加工：{processNames.join("、") || "—"}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent
+                    value="minimal"
+                    className="data-[state=inactive]:hidden"
+                  >
+                    {/* 结论 */}
+                    <div className="mb-2 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs">
+                      <p className="text-foreground/85">
+                        每颗行星只采 1 种 P0，共需{" "}
+                        <b className="font-mono text-emerald-400">
+                          {routes.total}
+                        </b>{" "}
+                        颗行星
+                        {routes.fabPlanet && (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · 1 颗加工（{routes.fabPlanet}
+                            {routes.fabHarvest
+                              ? `，顺带采 ${routes.fabHarvest.name}`
+                              : ""}
+                            ）
+                          </span>
+                        )}
+                        {routes.harvestPlanetCount > 0 && (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · {routes.harvestPlanetCount} 颗纯采集
+                          </span>
+                        )}
+                        {routes.combinations > 1 && (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · 行星类型组合可达 {routes.combinations} 种
+                          </span>
+                        )}
+                      </p>
+                    </div>
+
+                    {/* 加工行星 */}
+                    {routes.fabPlanet && (
+                      <div className="mb-2 rounded-lg border border-primary/40 bg-primary/5 p-2.5 text-xs">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
                           <span className="font-medium text-foreground/90">
-                            {planet}
+                            行星 1 · 加工
                           </span>
-                          <span className="text-[10px] text-muted-foreground/70">
-                            {PLANET_FACILITY_HINT[planet as PiPlanetType]}
-                          </span>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {routes.fabPlanet}
+                          </Badge>
+                          {routes.fabCandidates.length > 1 && (
+                            <span className="text-[10px] text-muted-foreground">
+                              也可用{" "}
+                              {routes.fabCandidates.slice(1).join(" / ")}
+                            </span>
+                          )}
                         </div>
                         <p className="text-muted-foreground">
-                          采集：
-                          {harvestIds
-                            .map(
-                              (typeId) =>
-                                summary.p0.find(([id]) => id === typeId)?.[1]
-                                  .name ?? `#${typeId}`,
-                            )
-                            .join("、") || "—"}
+                          设施：
+                          {(facilitiesOfPlanet(routes.fabPlanet) as string[]).join(
+                            " + ",
+                          )}
                         </p>
                         <p className="mt-0.5 text-muted-foreground">
-                          加工：{processNames.join("、") || "—"}
+                          加工：
+                          {deployment.processOf(routes.fabPlanet).join("、") ||
+                            "—"}
                         </p>
+                        {routes.fabHarvest && (
+                          <p className="mt-0.5 text-muted-foreground">
+                            顺带采集：{routes.fabHarvest.name}（
+                            {Math.ceil(
+                              routes.fabHarvest.quantity,
+                            ).toLocaleString()}
+                            /h）
+                          </p>
+                        )}
+                        {!routes.fabHarvest && (
+                          <p className="mt-0.5 text-[10px] text-muted-foreground/70">
+                            该行星只做加工，采集全靠其它行星
+                          </p>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
+                    )}
+
+                    {/* 每颗采集行星（一星一产物） */}
+                    <div className="flex flex-col gap-1.5">
+                      {routes.rows.map((row, index) => {
+                        const isFab = row.preferred === routes.fabPlanet;
+                        return (
+                          <div
+                            key={row.typeId}
+                            className={cn(
+                              "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-2.5 py-1.5 text-[11px]",
+                              isFab
+                                ? "border-border/40 bg-muted/20 opacity-70"
+                                : "border-border/60 bg-card/40",
+                            )}
+                          >
+                            <span className="font-mono text-muted-foreground/60">
+                              #
+                              {index + (routes.fabHarvest ? 1 : 2)}
+                            </span>
+                            <span className="font-medium text-foreground/90">
+                              {row.name}
+                            </span>
+                            <span className="font-mono tabular-nums text-muted-foreground">
+                              {Math.ceil(row.quantity).toLocaleString()}/h
+                            </span>
+                            <span className="text-muted-foreground">
+                              推荐：{row.preferred ?? "—"}
+                              {isFab ? "（加工行星兼任）" : ""}
+                            </span>
+                            {row.planets.length > 1 && (
+                              <span className="text-[10px] text-muted-foreground/70">
+                                也可由 {row.planets.filter((p) => p !== row.preferred).join(" / ")}{" "}
+                                采集
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {routes.rows.length === 0 && (
+                        <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                          先选择产物，这里会列出每种 P0 要部署的行星。
+                        </p>
+                      )}
+                    </div>
+
+                    {routes.rows.length > 0 && (
+                      <p className="mt-2 text-[10px] text-muted-foreground/70">
+                        规则：1 颗行星只采 1 种 P0。想减少行星数时，可把多种 P0
+                        放在同一颗行星上（本表按最保守的一星一产物计算）。
+                      </p>
+                    )}
+
+                    {/* 设施-等级对照（附录） */}
+                    <div className="mt-2 overflow-hidden rounded-lg border border-border">
+                      <table className="w-full text-xs">
+                        <thead className="bg-muted/40 text-muted-foreground">
+                          <tr>
+                            <th className="px-2 py-1.5 text-left font-medium">
+                              设施
+                            </th>
+                            <th className="px-2 py-1.5 text-left font-medium">
+                              覆盖等级
+                            </th>
+                            <th className="px-2 py-1.5 text-left font-medium">
+                              可承载行星
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {minimalStandard.facilityTiers.map((item) => (
+                            <tr
+                              key={item.facility}
+                              className="border-t border-border/60"
+                            >
+                              <td className="px-2 py-1.5">{item.facility}</td>
+                              <td className="px-2 py-1.5 font-mono text-muted-foreground">
+                                {item.tiers.map((tier) => `P${tier}`).join(" / ")}
+                              </td>
+                              <td className="px-2 py-1.5 text-muted-foreground">
+                                {item.planets.join(" / ") || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                          {minimalStandard.facilityTiers.length === 0 && (
+                            <tr>
+                              <td
+                                colSpan={3}
+                                className="px-2 py-3 text-center text-muted-foreground"
+                              >
+                                先选择产物
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </TabsContent>
+                </Tabs>
               </section>
 
               <p

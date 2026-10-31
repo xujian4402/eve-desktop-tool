@@ -1,3 +1,4 @@
+import { PiColoniesPanel } from "@/components/pi/pi-colonies-panel";
 import { PiPlanPanel } from "@/components/pi/pi-plan-panel";
 import { PiSchematicsPanel } from "@/components/pi/pi-schematics-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,12 +17,14 @@ export default function PlanetaryPage() {
         <TabsList className="shrink-0">
           <TabsTrigger value="schematics">配方与收益</TabsTrigger>
           <TabsTrigger value="plan">行星方案</TabsTrigger>
+          <TabsTrigger value="colonies">我的菜地</TabsTrigger>
         </TabsList>
 
-        {/* 给 TabsContent 加 display 类时要显式藏掉未激活面板，
-            因为 display 工具类会覆盖 UA 的 [hidden]{display:none} */}
+        {/* forceMount：Radix 默认会卸载非激活面板，切走再回来状态就丢了；
+            保持挂载后用 data-[state=inactive]:hidden 隐藏即可 */}
         <TabsContent
           value="schematics"
+          forceMount
           className="mt-4 flex min-h-0 flex-col data-[state=inactive]:hidden"
         >
           <PiSchematicsPanel />
@@ -29,9 +32,18 @@ export default function PlanetaryPage() {
 
         <TabsContent
           value="plan"
+          forceMount
           className="mt-4 flex min-h-0 flex-col data-[state=inactive]:hidden"
         >
           <PiPlanPanel />
+        </TabsContent>
+
+        <TabsContent
+          value="colonies"
+          forceMount
+          className="mt-4 flex min-h-0 flex-col data-[state=inactive]:hidden"
+        >
+          <PiColoniesPanel />
         </TabsContent>
       </Tabs>
     </div>

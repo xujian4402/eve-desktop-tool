@@ -83,7 +83,8 @@ export function PiInventoryPanel({
     PI_INVENTORY_GROUPS[0];
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    // 高度随内容自适应（不参与 flex-1 平分），下方合成结果占剩余空间
+    <div className="flex shrink-0 flex-col gap-2">
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <select
           className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground"
@@ -159,11 +160,7 @@ export function PiInventoryPanel({
         </span>
       </div>
 
-      <Tabs
-        value={tier}
-        onValueChange={setTier}
-        className="min-h-0 flex-1"
-      >
+      <Tabs value={tier} onValueChange={setTier} className="min-h-0">
         <div className="flex shrink-0 items-center gap-2">
           <TabsList className="shrink-0">
             {PI_INVENTORY_GROUPS.map((group) => (
@@ -224,10 +221,11 @@ export function PiInventoryPanel({
         <TabsContent
           key={group.tier}
           value={String(group.tier)}
-          className="mt-2 flex min-h-0 flex-col data-[state=inactive]:hidden"
+          forceMount
+          className="mt-2 data-[state=inactive]:hidden"
         >
-          {/* 卡片按容器宽度自适应列数（最小 240px，自动折行） */}
-          <div className="min-h-0 flex-1 overflow-auto">
+          {/* 卡片按容器宽度自适应列数（最小 200px，自动折行），高度随内容，过高才滚动 */}
+          <div className="max-h-[40vh] overflow-auto">
             <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-1.5 p-0.5">
               {group.items.map((item) => {
                 const stockQty = stock.get(item.typeId) ?? 0;

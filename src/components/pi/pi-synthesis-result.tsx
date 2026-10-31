@@ -350,6 +350,7 @@ export function PiSynthesisResult({
 
         <TabsContent
           value="focus"
+          forceMount
           className="mt-2 flex min-h-0 flex-col gap-2 data-[state=inactive]:hidden"
         >
       {/* 指定产物（可多选）：列表只展示这些产物的合成结果 */}
@@ -515,6 +516,7 @@ export function PiSynthesisResult({
             <TabsContent
               key={result.targetTypeId}
               value={String(result.targetTypeId)}
+              forceMount
               className="mt-2 flex min-h-0 flex-col data-[state=inactive]:hidden"
             >
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-t-lg border border-b-0 border-border bg-muted/40 px-3 py-2 text-xs">
@@ -689,6 +691,7 @@ export function PiSynthesisResult({
 
         <TabsContent
           value="default"
+          forceMount
           className="mt-2 flex min-h-0 flex-col gap-2 data-[state=inactive]:hidden"
         >
       {/* P1~P4 全等级统计（点击卡片切换下方明细） */}
@@ -766,6 +769,7 @@ export function PiSynthesisResult({
           <TabsContent
             key={group.tier}
             value={String(group.tier)}
+            forceMount
             className="mt-2 flex min-h-0 flex-col data-[state=inactive]:hidden"
           >
             <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border [&>[data-slot=table-container]]:overflow-visible">
