@@ -59,80 +59,180 @@ body {
 
 .app {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
 }
 
-/* 顶部菜单栏 */
-.menubar {
+/* ============================================================
+   左侧图标导航（参考游戏内功能栏）
+   ============================================================ */
+
+.sidebar {
   flex: 0 0 auto;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 28px;
-  height: 52px;
-  padding: 0 20px;
-  background-color: #111a25;
-  border-bottom: 1px solid #1f2c3d;
+  gap: 6px;
+  width: 56px;
+  padding: 10px 0;
+  background-color: #0d141d;
+  border-right: 1px solid #1f2c3d;
   user-select: none;
+  /* 悬停标签要溢出到内容区上方 */
+  z-index: 30;
+  transition: width 0.18s ease;
 }
 
-.brand {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: #6f8bab;
-  white-space: nowrap;
-}
-
-.menu {
-  display: flex;
+/* 展开态：图标 + 文字 */
+.sidebar.is-expanded {
+  width: 188px;
   align-items: stretch;
-  gap: 4px;
-  height: 100%;
+  padding: 10px 8px;
 }
 
-.menu-item {
-  position: relative;
-  padding: 0 18px;
+.sidebar__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 28px;
+  /* 推到底部 */
+  margin-top: auto;
   border: none;
-  border-radius: 0;
+  border-radius: 6px;
   background: transparent;
-  color: #8ba3bf;
-  font-size: 14px;
-  font-weight: 500;
-  font-family: inherit;
+  color: #6f8bab;
   cursor: pointer;
-  transition: color 0.18s ease, background-color 0.18s ease;
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease;
 }
 
-.menu-item:hover {
+.sidebar__toggle:hover {
   color: #cfe3fb;
   background-color: #16212e;
 }
 
-.menu-item:focus-visible {
-  outline: 1px solid #3f7fd0;
-  outline-offset: -3px;
+.sidebar.is-expanded .sidebar__toggle {
+  width: 100%;
+  justify-content: flex-end;
 }
 
-.menu-item.is-active {
-  color: #4ea3ff;
+.sidebar__menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar__menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar__item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #7e94ae;
+  cursor: pointer;
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.sidebar__item:hover {
+  color: #cfe3fb;
   background-color: #16212e;
+  border-color: #24354a;
 }
 
-.menu-item.is-active::after {
+.sidebar__item:focus-visible {
+  outline: 1px solid #3f7fd0;
+  outline-offset: 1px;
+}
+
+.sidebar__item.is-active {
+  color: #4ea3ff;
+  background-color: #152132;
+  border-color: #2c4a6d;
+}
+
+.sidebar__item.is-active::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
+  left: -9px;
+  top: 50%;
+  width: 2px;
+  height: 18px;
+  transform: translateY(-50%);
+  border-radius: 2px;
   background-color: #4ea3ff;
+}
+
+/* 展开态：整行铺满，图标与文字左对齐 */
+.sidebar.is-expanded .sidebar__item {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.sidebar.is-expanded .sidebar__item.is-active::before {
+  left: -8px;
+}
+
+/* 展开态已有文字，不再弹气泡 */
+.sidebar.is-expanded .sidebar__item::after {
+  display: none;
+}
+
+.sidebar__label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 悬停时的全称气泡 */
+.sidebar__item::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 10px;
+  border: 1px solid #2f4a6b;
+  border-radius: 6px;
+  background-color: #16212e;
+  color: #cfe3fb;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 40;
+}
+
+.sidebar__item:hover::after {
+  opacity: 1;
 }
 
 /* 内容区 */
 .content {
   flex: 1 1 auto;
+  min-width: 0;
   overflow: auto;
   padding: 32px;
   background:
