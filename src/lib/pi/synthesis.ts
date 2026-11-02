@@ -79,16 +79,34 @@ export interface PiSynthesisResult {
   p0: PiSynthesisLine[];
   /** 缺口 */
   shortfall: Array<{ typeId: number; name: string; amount: number }>;
+  /**
+   * 「再做一轮」（cycles + 1）时的完整明细：
+   * 当前库存连一组都合不出来时，用它评估各级缺口。
+   */
+  nextLines: PiSynthesisLine[];
+  nextP0: PiSynthesisLine[];
   totalCycleSeconds: number;
 }
 
 const EPS = 1e-9;
 
-interface Evaluation {
+export interface PiEvaluation {
   lines: PiSynthesisLine[];
   p0: PiSynthesisLine[];
   shortfall: Array<{ typeId: number; name: string; amount: number }>;
   totalCycleSeconds: number;
+}
+
+/**
+ * 按指定周期数核算需求与库存抵扣（不求解最大产能）。
+ * 成本估算需要「1 小时产线下各级实际消耗了多少库存」，直接用它。
+ */
+export function evaluateSynthesis(
+  stock: Map<number, number>,
+  targetTypeId: number,
+  targetCycles: number,
+): PiEvaluation {
+  return evaluate(stock, targetTypeId, targetCycles);
 }
 
 /** 给定目标周期数，核算需求、库存抵扣与缺口 */
@@ -96,7 +114,7 @@ function evaluate(
   stock: Map<number, number>,
   targetTypeId: number,
   targetCycles: number,
-): Evaluation {
+): PiEvaluation {
   const target = PI_RECIPE_MAP.get(targetTypeId);
   if (!target) {
     return { lines: [], p0: [], shortfall: [], totalCycleSeconds: 0 };
@@ -204,6 +222,8 @@ export function synthesizeMax(
       lines: [],
       p0: [],
       shortfall: [],
+      nextLines: [],
+      nextP0: [],
       stockOfTarget,
       totalCycleSeconds: 0,
     };
@@ -251,6 +271,10 @@ export function synthesizeMax(
     ),
     p0: result.p0.sort((left, right) => right.required - left.required),
     shortfall: nextStep.shortfall,
+    nextLines: nextStep.lines.sort(
+      (left, right) => right.tier - left.tier || right.required - left.required,
+    ),
+    nextP0: nextStep.p0.sort((left, right) => right.required - left.required),
     stockOfTarget,
     totalCycleSeconds: result.totalCycleSeconds,
   };

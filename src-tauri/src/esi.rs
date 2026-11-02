@@ -197,20 +197,39 @@ pub struct OrdersPayload {
     pub fetched_at: i64,
     /// 是否因页数上限被截断
     pub truncated: bool,
+    /// ESI 缓存到期时间（unix 毫秒）：在此之前重新同步仍拿到同一份数据
+    pub cache_expires_at: Option<i64>,
 }
 
-/// 按 X-Pages 分页拉全量订单
+/// 从响应头解析缓存有效期（秒）。
+///
+/// ESI 的订单类接口缓存约 1200 秒，期间即使游戏内改了订单，重新拉取拿到的
+/// 仍是同一份缓存数据。把 max-age 带回前端，界面才能解释「为什么同步没变」。
+fn parse_cache_max_age(headers: &reqwest::header::HeaderMap) -> Option<i64> {
+    let value = headers.get("cache-control")?.to_str().ok()?;
+
+    value.split(',').find_map(|part| {
+        part.trim()
+            .strip_prefix("max-age=")
+            .and_then(|seconds| seconds.trim().parse::<i64>().ok())
+    })
+}
+
+/// 按 X-Pages 分页拉全量订单。
+///
+/// 返回值第三项是 ESI 缓存到期时间（unix 毫秒），拿不到缓存头时为 None。
 async fn fetch_paged_orders<T>(
     url: String,
     token: &str,
     label: &str,
-) -> Result<(Vec<T>, bool), String>
+) -> Result<(Vec<T>, bool, Option<i64>), String>
 where
     T: serde::de::DeserializeOwned,
 {
     let mut all: Vec<T> = Vec::new();
     let mut page = 1usize;
     let mut truncated = false;
+    let mut cache_expires_at: Option<i64> = None;
 
     loop {
         if page > MAX_ORDER_PAGES {
@@ -224,6 +243,8 @@ where
                 ("datasource", "tranquility".to_string()),
                 ("page", page.to_string()),
             ])
+            // 请求绕过中间缓存；服务端缓存未过期时仍可能返回同一份数据
+            .header("cache-control", "no-cache")
             .bearer_auth(token)
             .send()
             .await
@@ -246,6 +267,13 @@ where
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(1);
+
+        // 只取第一页的缓存头即可（同一次响应共享同一份缓存策略）
+        if page == 1 {
+            if let Some(max_age) = parse_cache_max_age(response.headers()) {
+                cache_expires_at = Some(chrono_now_ms() + max_age * 1000);
+            }
+        }
 
         // 先取原文再解析：一是不让空响应直接报解码错误，
         // 二是解析失败时能把响应片段带进错误里，便于定位字段不匹配。
@@ -272,7 +300,7 @@ where
         page += 1;
     }
 
-    Ok((all, truncated))
+    Ok((all, truncated, cache_expires_at))
 }
 
 const RATE_LIMIT_HINT: &str = "ESI 限流（错误预算耗尽），请等待一分钟后再试";
@@ -287,12 +315,14 @@ pub async fn sync_structure_orders(
     let token = ensure_token(pool.inner(), character_id).await?;
 
     let url = format!("{ESI_BASE}/markets/structures/{structure_id}/");
-    let (orders, truncated) = fetch_paged_orders::<EsiOrder>(url, &token, "拉取建筑订单").await?;
+    let (orders, truncated, cache_expires_at) =
+        fetch_paged_orders::<EsiOrder>(url, &token, "拉取建筑订单").await?;
 
     Ok(OrdersPayload {
         orders,
         fetched_at: chrono_now_ms(),
         truncated,
+        cache_expires_at,
     })
 }
 
@@ -305,12 +335,14 @@ pub async fn sync_character_orders(
     let token = ensure_token(pool.inner(), character_id).await?;
 
     let url = format!("{ESI_BASE}/characters/{character_id}/orders/");
-    let (orders, truncated) = fetch_paged_orders::<EsiOrder>(url, &token, "拉取角色订单").await?;
+    let (orders, truncated, cache_expires_at) =
+        fetch_paged_orders::<EsiOrder>(url, &token, "拉取角色订单").await?;
 
     Ok(OrdersPayload {
         orders,
         fetched_at: chrono_now_ms(),
         truncated,
+        cache_expires_at,
     })
 }
 
@@ -545,7 +577,7 @@ async fn discover_structure_ids(
     // 来源 1：角色挂单
     let orders_url = format!("{ESI_BASE}/characters/{character_id}/orders/");
     match fetch_paged_orders::<EsiOrder>(orders_url, token, "角色挂单").await {
-        Ok((orders, _)) => {
+        Ok((orders, _, _)) => {
             for order in &orders {
                 push_structure_id(&mut found, Some(order.location_id), "挂单");
             }
@@ -578,7 +610,7 @@ async fn discover_structure_ids(
     // 来源 3：合同起止地点
     let contracts_url = format!("{ESI_BASE}/characters/{character_id}/contracts/");
     match fetch_paged_orders::<EsiContract>(contracts_url, token, "角色合同").await {
-        Ok((contracts, _)) => {
+        Ok((contracts, _, _)) => {
             for contract in &contracts {
                 push_structure_id(&mut found, contract.start_location_id, "合同");
                 push_structure_id(&mut found, contract.end_location_id, "合同");
@@ -613,7 +645,7 @@ async fn discover_structure_ids(
         Some(corp_id) => {
             let url = format!("{ESI_BASE}/corporations/{corp_id}/structures/");
             match fetch_paged_orders::<EsiCorporationStructure>(url, token, "军团建筑").await {
-                Ok((structures, _)) => {
+                Ok((structures, _, _)) => {
                     for structure in &structures {
                         push_structure_id(&mut found, Some(structure.structure_id), "军团");
                     }

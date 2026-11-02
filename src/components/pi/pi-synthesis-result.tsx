@@ -34,7 +34,7 @@ import {
   estimateTierProducts,
   type PiProductCost,
 } from "@/lib/pi/estimate";
-import { piTierLabel, type PiStockSource } from "@/lib/pi/inventory";
+import { mergeQuantities, piTierLabel } from "@/lib/pi/inventory";
 import { synthesizeMax } from "@/lib/pi/synthesis";
 import type { PiPriceRow, PiTier } from "@/lib/pi/types";
 import { cn } from "@/lib/utils";
@@ -76,18 +76,20 @@ function orderByCap(
 /**
  * 下半部分：合成结果（P1~P4 全量，按等级分页签）。
  *
- * 口径：1 条产线满负荷 1 小时；标「库存」的原料优先抵扣且不计成本，
- * 标「购买」的原料按行情价买入；产物按最高买单卖出。
- * 另给出「库存最多还能合成多少个」，只统计标为库存的物资。
+ * 口径：1 条产线满负荷 1 小时；库存里的原料优先抵扣且不计成本，
+ * 不足的部分按行情价买入；产物按最高买单卖出。
+ * 另给出「库存最多还能合成多少个」，库存与计划从市场买入的数量都计入可用量。
  */
 export function PiSynthesisResult({
   priceRows,
   stock,
-  source,
+  marketQty,
 }: {
   priceRows: Map<number, PiPriceRow>;
+  /** 库存里已有的数量（优先抵扣，不计成本） */
   stock: Map<number, number>;
-  source: Record<number, PiStockSource>;
+  /** 计划从市场买入的数量（可用但按行情价计成本） */
+  marketQty: Map<number, number>;
 }) {
   const [tier, setTier] = useState<string>("4");
   /** 下半部分视图：默认收益（全量分级）/ 指定产物收益 */
@@ -99,21 +101,22 @@ export function PiSynthesisResult({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
 
-  /**
-   * 可合成上限用的可用量：库存数量与「计划购买」的数量都算进来
-   * （来源标记只影响成本口径：库存不计成本，购买按行情价计入）。
-   */
-  const stockForSynthesis = useMemo(() => new Map(stock), [stock]);
+  /** 可合成上限用的可用量：库存 + 计划从市场买入的数量 */
+  const stockForSynthesis = useMemo(
+    () => mergeQuantities(stock, marketQty),
+    [stock, marketQty],
+  );
 
-  const hasStock = stock.size > 0;
+  const hasStock = stockForSynthesis.size > 0;
 
+  /** 1 小时成本：库存与市场数量都参与抵扣，分别计入库存成本 / 市场成本 */
   const rows = useMemo(
     () =>
       TIERS.map((item) => ({
         tier: item,
-        items: estimateTierProducts(item, priceRows, stock, source),
+        items: estimateTierProducts(item, priceRows, stock, marketQty),
       })),
-    [priceRows, stock, source],
+    [priceRows, stock, marketQty],
   );
 
   /** 库存可合成数（依赖库存而非价格，单独计算） */
@@ -133,29 +136,34 @@ export function PiSynthesisResult({
   );
 
   /**
-   * 上半部分填写的数量按「库存 / 购买」拆分的金额：
-   * 库存 = 已有物资价值，购买 = 本次需要采购的支出。
+   * 上半部分填写的数量按「库存 / 市场」拆分的金额：
+   * 库存 = 已有物资价值，市场 = 本次计划采购的支出。
    */
   const valueSplit = useMemo(() => {
     let stockValue = 0;
     let buyValue = 0;
     let incomplete = false;
 
-    for (const [typeId, quantity] of stock) {
-      if (quantity <= 0) continue;
-      const row = priceRows.get(typeId);
-      const unit = row?.buy ?? row?.sell ?? null;
-      if (unit === null) {
-        incomplete = true;
-        continue;
+    const accumulate = (quantities: Map<number, number>, intoStock: boolean) => {
+      for (const [typeId, quantity] of quantities) {
+        if (quantity <= 0) continue;
+        const row = priceRows.get(typeId);
+        const unit = row?.buy ?? row?.sell ?? null;
+        if (unit === null) {
+          incomplete = true;
+          continue;
+        }
+        const amount = unit * quantity;
+        if (intoStock) stockValue += amount;
+        else buyValue += amount;
       }
-      const amount = unit * quantity;
-      if ((source[typeId] ?? "buy") === "stock") stockValue += amount;
-      else buyValue += amount;
-    }
+    };
+
+    accumulate(stock, true);
+    accumulate(marketQty, false);
 
     return { stockValue, buyValue, incomplete };
-  }, [stock, source, priceRows]);
+  }, [stock, marketQty, priceRows]);
 
 
 
@@ -166,28 +174,30 @@ export function PiSynthesisResult({
       const revenue = sellUnit === null ? null : sellUnit * result.output;
 
       /**
-       * 采购需求：
-       * - 能合成（output > 0）时取该批次的 P0 缺口；
-       * - 合不出来（output = 0）时 p0 明细为空，改用「再做 1 个还缺多少」评估，
+       * 采购需求 = 合成链 P0–P3 各级缺口（排除目标产物自身）：
+       * - 能合成（output > 0）时看本批次明细；
+       * - 合不出来（output = 0）时本批次明细为空，改用「再做一轮」的明细，
        *   否则采购成本会恒为 0，看不出做这个产物到底要花多少钱。
        */
       const estimated = result.output === 0;
-      const needs = estimated
-        ? result.shortfall.map((item) => ({
-            typeId: item.typeId,
-            amount: Math.ceil(item.amount),
-          }))
-        : result.p0
-            .filter((line) => line.remaining > 0.5)
-            .map((line) => ({
-              typeId: line.typeId,
-              amount: Math.ceil(line.remaining),
-            }));
+      const detailLines = (estimated ? result.nextLines : result.lines).filter(
+        (line) => line.typeId !== result.targetTypeId,
+      );
+      const detailP0 = estimated ? result.nextP0 : result.p0;
+
+      const needs = [...detailLines, ...detailP0]
+        .filter((line) => line.remaining > 0.5)
+        .map((line) => ({
+          typeId: line.typeId,
+          amount: Math.ceil(line.remaining),
+        }));
 
       let cost = 0;
       let costIncomplete = false;
       for (const need of needs) {
-        const unit = priceRows.get(need.typeId)?.sell ?? null;
+        // P0 取最低卖单（买入价），P1~P3 取最高买单（市场卖价）
+        const row = priceRows.get(need.typeId);
+        const unit = row?.sell ?? row?.buy ?? null;
         if (unit === null) {
           costIncomplete = true;
           continue;
@@ -224,12 +234,44 @@ export function PiSynthesisResult({
         ? null
         : items.reduce((acc, item) => acc + (pick(item) ?? 0), 0);
 
+    const revenue = sumOf((item) => item.revenue);
+    const cost = sumOf((item) => item.cost);
+    const profit = sumOf((item) => item.profit);
+
     return {
       items,
-      revenue: sumOf((item) => item.revenue),
-      cost: sumOf((item) => item.cost),
-      profit: sumOf((item) => item.profit),
+      revenue,
+      cost,
+      profit,
+      margin:
+        cost !== null && cost > 0 && profit !== null ? profit / cost : null,
     };
+  }, [focusResults, priceRows]);
+
+  /**
+   * 当前选择产物的库存价值：
+   * 所选产物的合成链里由库存直接抵扣的物资，按各自单价折算。
+   * 多个产物各自独立核算，共享同一种原料时会重复计入（按各自可合成批次估算）。
+   */
+  const focusStockValue = useMemo(() => {
+    let value = 0;
+    let incomplete = false;
+
+    for (const result of focusResults) {
+      for (const line of [...result.lines, ...result.p0]) {
+        if (line.fromStock <= 0) continue;
+
+        const row = priceRows.get(line.typeId);
+        const unit = row?.sell ?? row?.buy ?? null;
+        if (unit === null) {
+          incomplete = true;
+          continue;
+        }
+        value += unit * line.fromStock;
+      }
+    }
+
+    return { value, incomplete };
   }, [focusResults, priceRows]);
 
   /** 选中项失效时回落到第一个指定产物 */
@@ -395,23 +437,29 @@ export function PiSynthesisResult({
           </Badge>
         ))}
 
-        {focusTypeIds.length > 0 && stock.size === 0 && (
+        {focusTypeIds.length > 0 && stockForSynthesis.size === 0 && (
           <span className="text-[11px] text-muted-foreground">
-            未读取库存，按上方填写的数量计算
+            未读取库存，按上方填写的市场数量计算
           </span>
         )}
       </div>
 
-      {/* 库存价值 / 购买成本（按上半部分的标记与数量统计） */}
+      {/* 库存总览（上半部分填报的全部数量） */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs">
         <span className="text-muted-foreground">
-          库存价值{" "}
+          总库存价值{" "}
           <b className="font-mono tabular-nums text-emerald-400">
+            {isk(valueSplit.stockValue + valueSplit.buyValue)}
+          </b>
+        </span>
+        <span className="text-muted-foreground">
+          其中已有库存{" "}
+          <b className="font-mono tabular-nums text-emerald-300/90">
             {isk(valueSplit.stockValue)}
           </b>
         </span>
         <span className="text-muted-foreground">
-          购买成本{" "}
+          市场采购{" "}
           <b className="font-mono tabular-nums text-sky-300">
             {valueSplit.incomplete
               ? `${isk(valueSplit.buyValue)}+`
@@ -423,7 +471,7 @@ export function PiSynthesisResult({
         </span>
       </div>
 
-      {/* 多产物收入汇总 */}
+      {/* 当前选择产物的收益汇总：利润只按所选产物自己的原料缺口计算 */}
       {focusResults.length > 0 && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs">
           <span className="text-muted-foreground">
@@ -435,9 +483,7 @@ export function PiSynthesisResult({
           <span className="text-muted-foreground">
             采购成本{" "}
             <b className="font-mono tabular-nums text-amber-300/90">
-              {valueSplit.incomplete
-                ? `${isk(valueSplit.buyValue)}+`
-                : isk(valueSplit.buyValue)}
+              {focusTotals.cost === null ? "缺价" : isk(focusTotals.cost)}
             </b>
           </span>
           <span className="text-muted-foreground">
@@ -445,27 +491,32 @@ export function PiSynthesisResult({
             <b
               className={cn(
                 "font-mono tabular-nums",
-                (focusTotals.revenue === null
-                  ? 0
-                  : focusTotals.revenue - valueSplit.buyValue) >= 0
+                (focusTotals.profit ?? 0) >= 0
                   ? "text-emerald-400"
                   : "text-rose-400",
               )}
             >
-              {focusTotals.revenue === null
-                ? "—"
-                : isk(focusTotals.revenue - valueSplit.buyValue)}
+              {focusTotals.profit === null ? "—" : isk(focusTotals.profit)}
             </b>
           </span>
           <span className="text-muted-foreground">
             利润率{" "}
-            {focusTotals.revenue === null || valueSplit.buyValue <= 0
+            {focusTotals.margin === null
               ? "—"
-              : `${(((focusTotals.revenue - valueSplit.buyValue) / valueSplit.buyValue) * 100).toFixed(1)}%`}
+              : `${(focusTotals.margin * 100).toFixed(1)}%`}
+          </span>
+          <span className="text-muted-foreground">
+            当前选择库存价值{" "}
+            <b className="font-mono tabular-nums text-emerald-300/90">
+              {focusStockValue.incomplete
+                ? `${isk(focusStockValue.value)}+`
+                : isk(focusStockValue.value)}
+            </b>
           </span>
 
           <span className="text-[10px] text-muted-foreground/70">
-            采购成本 = 上半部分标记「购买」的金额总和；收入按产物最高买单估算
+            采购成本 = 所选产物合成链的 P0–P3 各级缺口按行情价估算；利润 = 收入
+            − 采购成本；库存价值 = 产线中被库存抵扣的物资
           </span>
         </div>
       )}
@@ -557,17 +608,23 @@ export function PiSynthesisResult({
                       )}
                     </span>
                     <span className="text-muted-foreground">
-                      原料采购{" "}
+                      采购成本{" "}
                       <b className="font-mono tabular-nums text-amber-300/90">
                         {totals.cost === null ? "缺价" : isk(totals.cost)}
                       </b>
+                      <span
+                        className="text-muted-foreground/70"
+                        title="合成链 P0–P3 各级缺口按行情价合计"
+                      >
+                        （P0–P3 缺口）
+                      </span>
                       {totals.estimated && (
                         <span
                           className="text-muted-foreground/70"
-                          title="当前库存连 1 个都合不出来，采购成本按「做 1 个的缺口」估算"
+                          title="当前库存连 1 个都合不出来，采购成本按「再做一轮的缺口」估算"
                         >
                           {" "}
-                          （按做 1 个估算）
+                          · 按做 1 个估算
                         </span>
                       )}
                     </span>
@@ -781,8 +838,9 @@ export function PiSynthesisResult({
                       <TableHead className="text-right">库存可合成</TableHead>
                     )}
                     <TableHead className="text-right">1h 产出</TableHead>
-                    <TableHead className="text-right">需购买</TableHead>
-                    <TableHead className="text-right">成本</TableHead>
+                    <TableHead className="text-right">库存成本</TableHead>
+                    <TableHead className="text-right">市场成本</TableHead>
+                    <TableHead className="text-right">总成本</TableHead>
                     <TableHead className="text-right">收入</TableHead>
                     <TableHead className="text-right">利润</TableHead>
                     <TableHead className="text-right">利润率</TableHead>
@@ -806,13 +864,19 @@ export function PiSynthesisResult({
                       <TableCell className="text-right tabular-nums">
                         {item.outputQty.toLocaleString()}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {Math.ceil(item.buyCount).toLocaleString()}
-                        {item.stockCount > 0 && (
-                          <span className="block text-[10px] text-emerald-400/80">
-                            库存 {Math.floor(item.stockCount).toLocaleString()}
-                          </span>
-                        )}
+                      <TableCell className="text-right tabular-nums text-emerald-400/90">
+                        {item.stockCost === null
+                          ? item.costIncomplete
+                            ? "缺原料价"
+                            : "—"
+                          : isk(item.stockCost)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-amber-300/90">
+                        {item.marketCost === null
+                          ? item.costIncomplete
+                            ? "缺原料价"
+                            : "—"
+                          : isk(item.marketCost)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">
                         {item.cost === null

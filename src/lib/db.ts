@@ -270,6 +270,8 @@ export interface OrdersPayload {
   orders: OrderRow[];
   fetchedAt: number;
   truncated: boolean;
+  /** ESI 缓存到期时间（unix 毫秒），在此之前重复同步拿到的仍是同一份数据 */
+  cacheExpiresAt?: number | null;
 }
 
 /** 批量语句的分片行数：13 列 × 200 行 = 2600 个参数，低于 SQLite 参数上限 */

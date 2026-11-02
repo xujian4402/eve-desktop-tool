@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronsLeft,
   ChevronsRight,
@@ -15,6 +15,7 @@ import AccountPage from "./pages/AccountPage";
 import MarketPage from "./pages/MarketPage";
 import PlanetaryPage from "./pages/PlanetaryPage";
 import { Toaster } from "@/components/ui/sonner";
+import { useOrderSyncStore } from "@/stores/order-sync-store";
 import type { MenuKey } from "./lib/nav";
 import "./App.css";
 
@@ -72,6 +73,12 @@ function App() {
   const [activeMenu, setActiveMenu] = useState<MenuKey>("planetary");
   /** 左侧菜单是否收起（收起时只显示图标） */
   const [collapsed, setCollapsed] = useState(true);
+
+  // 订单自动同步挂在应用级：切到其他菜单也继续每 30 分钟同步一次
+  const initOrderSync = useOrderSyncStore((state) => state.init);
+  useEffect(() => {
+    initOrderSync();
+  }, [initOrderSync]);
 
   const current = MENUS.find((menu) => menu.key === activeMenu) ?? MENUS[0];
 

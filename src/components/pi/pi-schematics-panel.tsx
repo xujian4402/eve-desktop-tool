@@ -9,8 +9,8 @@ import { PI_P0, PI_SCHEMATICS } from "@/lib/pi/data";
 import {
   PI_INVENTORY_GROUPS,
   PI_MARKETS,
+  PI_READONLY_TYPE_IDS,
   toPriceRows,
-  type PiStockSource,
 } from "@/lib/pi/inventory";
 import { fetchBestPrices } from "@/lib/pi/market";
 
@@ -22,7 +22,7 @@ interface AssetTotals {
 }
 
 const PRICE_STORAGE_KEY = "pi-inventory-prices-v1";
-const SOURCE_STORAGE_KEY = "pi-inventory-sources-v1";
+const MARKET_QTY_STORAGE_KEY = "pi-inventory-market-qty-v1";
 const MARKET_STORAGE_KEY = "pi-inventory-market-v1";
 
 /** P0 集合：P0 按最低卖单（买入），P1~P4 按最高买单（卖出） */
@@ -55,9 +55,23 @@ export function PiSchematicsPanel() {
   const [prices, setPrices] = useState<Record<number, string>>(() =>
     readStorage<Record<number, string>>(PRICE_STORAGE_KEY, {}),
   );
-  const [source, setSource] = useState<Record<number, PiStockSource>>(() =>
-    readStorage<Record<number, PiStockSource>>(SOURCE_STORAGE_KEY, {}),
-  );
+  /** 计划从市场买入的数量（与库存数量分开录入，本地持久化） */
+  const [marketQty, setMarketQty] = useState<Map<number, number>>(() => {
+    const stored = readStorage<Record<string, number>>(
+      MARKET_QTY_STORAGE_KEY,
+      {},
+    );
+    const map = new Map<number, number>();
+    for (const [key, value] of Object.entries(stored)) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        map.set(Number(key), Math.floor(numeric));
+      }
+    }
+    return map;
+  });
+  /** 市场数量输入框草稿 */
+  const [marketDraft, setMarketDraft] = useState<Record<number, string>>({});
   const [market, setMarket] = useState<number>(() =>
     readStorage<number>(MARKET_STORAGE_KEY, PI_MARKETS[0].id),
   );
@@ -83,11 +97,14 @@ export function PiSchematicsPanel() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(SOURCE_STORAGE_KEY, JSON.stringify(source));
+      localStorage.setItem(
+        MARKET_QTY_STORAGE_KEY,
+        JSON.stringify(Object.fromEntries(marketQty)),
+      );
     } catch {
       // 忽略存储失败
     }
-  }, [source]);
+  }, [marketQty]);
 
   useEffect(() => {
     try {
@@ -119,14 +136,6 @@ export function PiSchematicsPanel() {
         for (const row of rows) map.set(row.type_id, row.quantity);
 
         setStock(map);
-        // 只给还没设置过来源的物品打上「库存」，不覆盖用户的手动选择
-        setSource((current) => {
-          const next = { ...current };
-          for (const row of rows) {
-            if (next[row.type_id] === undefined) next[row.type_id] = "stock";
-          }
-          return next;
-        });
 
         const last = rows.reduce((max, row) => Math.max(max, row.updated_at), 0);
         setStockMessage(
@@ -149,6 +158,18 @@ export function PiSchematicsPanel() {
     [prices],
   );
 
+  /**
+   * 参与计算的库存：P4 只做参考展示，
+   * 不能用来抵扣合成、也不进库存价值/采购成本。
+   */
+  const calcStock = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const [typeId, quantity] of stock) {
+      if (!PI_READONLY_TYPE_IDS.has(typeId)) map.set(typeId, quantity);
+    }
+    return map;
+  }, [stock]);
+
   /** 手动修改库存数量：草稿保存原始输入，Map 里存解析后的整数 */
   const handleStockChange = (typeId: number, raw: string) => {
     setStockDraft((current) => ({ ...current, [typeId]: raw }));
@@ -165,17 +186,46 @@ export function PiSchematicsPanel() {
     });
   };
 
-  /** 清除指定等级的全部库存（界面 + 本地库同步） */
+  /** 手动修改市场采购数量 */
+  const handleMarketQtyChange = (typeId: number, raw: string) => {
+    setMarketDraft((current) => ({ ...current, [typeId]: raw }));
+
+    const numeric = Number(raw);
+    setMarketQty((current) => {
+      const next = new Map(current);
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        next.delete(typeId);
+      } else {
+        next.set(typeId, Math.floor(numeric));
+      }
+      return next;
+    });
+  };
+
+  /** 清除指定等级的库存与市场数量（库存同步到本地库） */
   const handleClearStock = async (typeIds: number[]) => {
     const targets = new Set(typeIds);
 
-    const next = new Map<number, number>();
+    const nextStock = new Map<number, number>();
     for (const [typeId, quantity] of stock) {
-      if (!targets.has(typeId)) next.set(typeId, quantity);
+      if (!targets.has(typeId)) nextStock.set(typeId, quantity);
     }
-    setStock(next);
+    setStock(nextStock);
+
+    setMarketQty((current) => {
+      const next = new Map<number, number>();
+      for (const [typeId, quantity] of current) {
+        if (!targets.has(typeId)) next.set(typeId, quantity);
+      }
+      return next;
+    });
 
     setStockDraft((current) => {
+      const draft = { ...current };
+      for (const typeId of typeIds) delete draft[typeId];
+      return draft;
+    });
+    setMarketDraft((current) => {
       const draft = { ...current };
       for (const typeId of typeIds) delete draft[typeId];
       return draft;
@@ -184,50 +234,46 @@ export function PiSchematicsPanel() {
     try {
       await savePiStock(
         activeCharacter?.character_id ?? null,
-        [...next].map(([typeId, quantity]) => ({ typeId, quantity })),
+        [...nextStock].map(([typeId, quantity]) => ({ typeId, quantity })),
       );
-      setStockMessage(`已清除 ${typeIds.length} 项的库存数量`);
+      setStockMessage(`已清除 ${typeIds.length} 项的库存与市场数量`);
     } catch {
-      setStockMessage("已清除界面上的库存，但写入本地库失败");
+      setStockMessage("已清除界面上的数量，但写入本地库失败");
     }
   };
 
-  /** 一键录入：把当前等级的物品数量都设为同一个值（界面 + 本地库同步） */
-  const handleBulkFill = async (typeIds: number[], quantity: number) => {
+  /** 一键录入：把当前等级的物品市场数量都设为同一个值 */
+  const handleBulkFill = (typeIds: number[], quantity: number) => {
     if (!Number.isFinite(quantity) || quantity <= 0) return;
 
     const value = Math.floor(quantity);
-    const next = new Map(stock);
-    for (const typeId of typeIds) next.set(typeId, value);
+    setMarketQty((current) => {
+      const next = new Map(current);
+      for (const typeId of typeIds) next.set(typeId, value);
+      return next;
+    });
 
-    setStock(next);
-    setStockDraft((current) => {
+    setMarketDraft((current) => {
       const draft = { ...current };
       for (const typeId of typeIds) delete draft[typeId];
       return draft;
     });
 
-    try {
-      await savePiStock(
-        activeCharacter?.character_id ?? null,
-        [...next].map(([typeId, quantity]) => ({ typeId, quantity })),
-      );
-      setStockMessage(`已将当前等级 ${typeIds.length} 项的数量设为 ${value}`);
-    } catch {
-      setStockMessage("已设置界面数量，但写入本地库失败");
-    }
+    setStockMessage(`已将当前等级 ${typeIds.length} 项的市场数量设为 ${value}`);
   };
 
-  /** 清除所有等级的库存（界面 + 本地库同步） */
+  /** 清除所有等级的库存与市场数量（库存同步到本地库） */
   const handleClearAllStock = async () => {
     setStock(new Map());
     setStockDraft({});
+    setMarketQty(new Map());
+    setMarketDraft({});
 
     try {
       await savePiStock(activeCharacter?.character_id ?? null, []);
-      setStockMessage("已清除全部库存数量");
+      setStockMessage("已清除全部库存与市场数量");
     } catch {
-      setStockMessage("已清除界面上的库存，但写入本地库失败");
+      setStockMessage("已清除界面上的数量，但写入本地库失败");
     }
   };
 
@@ -313,13 +359,6 @@ export function PiSchematicsPanel() {
       // ESI 重读后草稿作废，否则会盖住新数量
       setStockDraft({});
 
-      // 读到库存的物品默认按「库存」计，用户可再手动改成购买
-      setSource((current) => {
-        const updated = { ...current };
-        for (const typeId of merged.keys()) updated[typeId] = "stock";
-        return updated;
-      });
-
       // 落库：下次打开应用直接恢复，不必再请求 ESI
       let savedHint = "";
       try {
@@ -357,7 +396,8 @@ export function PiSchematicsPanel() {
         prices={prices}
         stock={stock}
         stockDraft={stockDraft}
-        source={source}
+        marketQty={marketQty}
+        marketDraft={marketDraft}
         market={market}
         characters={characters.map((item) => ({
           id: item.character_id,
@@ -370,12 +410,10 @@ export function PiSchematicsPanel() {
           setPrices((current) => ({ ...current, [typeId]: value }))
         }
         onStockChange={handleStockChange}
-        onSourceChange={(typeId, value) =>
-          setSource((current) => ({ ...current, [typeId]: value }))
-        }
+        onMarketQtyChange={handleMarketQtyChange}
         onClearStock={(typeIds) => void handleClearStock(typeIds)}
         onClearAllStock={() => void handleClearAllStock()}
-        onBulkFill={(typeIds, quantity) => void handleBulkFill(typeIds, quantity)}
+        onBulkFill={handleBulkFill}
         onRefreshPrices={() => void handleRefreshPrices()}
         onFetchStock={() => void handleFetchStock()}
         fetchingPrices={fetchingPrices}
@@ -386,8 +424,8 @@ export function PiSchematicsPanel() {
 
       <PiSynthesisResult
         priceRows={priceRows}
-        stock={stock}
-        source={source}
+        stock={calcStock}
+        marketQty={marketQty}
       />
     </div>
   );

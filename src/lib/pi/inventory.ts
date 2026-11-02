@@ -1,9 +1,6 @@
 import { PI_P0, PI_SCHEMATICS_BY_TIER } from "@/lib/pi/data";
 import type { PiPriceRow, PiTier } from "@/lib/pi/types";
 
-/** 物资来源：购买（按行情买）还是库存（已有，可直接抵扣） */
-export type PiStockSource = "buy" | "stock";
-
 /** 等级中文名（界面页签与统计统一使用） */
 export const PI_TIER_LABEL: Record<0 | PiTier, string> = {
   0: "P0 原料",
@@ -49,6 +46,20 @@ export const PI_INVENTORY_GROUPS: PiInventoryGroup[] = [
   })),
 ];
 
+/**
+ * P4 高级材料在上半部分只做价格/数量展示：
+ * 数量不参与库存估值、采购成本、合成抵扣等任何计算。
+ */
+export const PI_READONLY_TYPE_IDS: Set<number> = new Set(
+  PI_INVENTORY_GROUPS.filter((group) => group.tier === 4).flatMap((group) =>
+    group.items.map((item) => item.typeId),
+  ),
+);
+
+export function isReadonlyItem(typeId: number): boolean {
+  return PI_READONLY_TYPE_IDS.has(typeId);
+}
+
 /** 可选的行情市场（星域，均为主贸易枢纽） */
 export const PI_MARKETS: Array<{ id: number; name: string }> = [
   { id: 10000002, name: "Jita · The Forge" },
@@ -90,19 +101,22 @@ export function itemValue(
   return quantity * price;
 }
 
-/** 一组物品的库存估值 */
+/** 一组物品的库存估值（P4 只读，不计入） */
 export function groupValue(
   group: PiInventoryGroup,
   stock: Map<number, number>,
   prices: Record<number, string>,
 ): number {
   return group.items.reduce(
-    (sum, item) => sum + itemValue(item.typeId, stock, prices),
+    (sum, item) =>
+      isReadonlyItem(item.typeId)
+        ? sum
+        : sum + itemValue(item.typeId, stock, prices),
     0,
   );
 }
 
-/** 全部物品的库存估值 */
+/** 全部物品的库存估值（P4 只读，不计入） */
 export function totalValue(
   stock: Map<number, number>,
   prices: Record<number, string>,
@@ -114,33 +128,31 @@ export function totalValue(
 }
 
 export interface PiValueSplit {
-  /** 标记为「库存」的数量 × 单价 */
+  /** 库存数量 × 单价 */
   stockValue: number;
-  /** 标记为「购买」的数量 × 单价 */
+  /** 市场（计划采购）数量 × 单价 */
   buyValue: number;
 }
 
-/** 按来源拆分价值：库存价值 vs 待购买金额 */
+/** 按来源拆分价值：库存价值 vs 市场采购金额 */
 export function valueBySource(
   items: PiInventoryItem[],
   stock: Map<number, number>,
+  marketQty: Map<number, number>,
   prices: Record<number, string>,
-  source: Record<number, PiStockSource>,
 ): PiValueSplit {
   let stockValue = 0;
   let buyValue = 0;
 
   for (const item of items) {
-    const quantity = stock.get(item.typeId) ?? 0;
-    const price = Number(prices[item.typeId]);
-    if (quantity <= 0 || !Number.isFinite(price) || price <= 0) continue;
+    // P4 只做参考展示，数量不进任何金额统计
+    if (isReadonlyItem(item.typeId)) continue;
 
-    const amount = quantity * price;
-    if ((source[item.typeId] ?? "buy") === "stock") {
-      stockValue += amount;
-    } else {
-      buyValue += amount;
-    }
+    const price = Number(prices[item.typeId]);
+    if (!Number.isFinite(price) || price <= 0) continue;
+
+    stockValue += price * (stock.get(item.typeId) ?? 0);
+    buyValue += price * (marketQty.get(item.typeId) ?? 0);
   }
 
   return { stockValue, buyValue };
@@ -150,22 +162,35 @@ export function valueBySource(
 export function groupValueBySource(
   group: PiInventoryGroup,
   stock: Map<number, number>,
+  marketQty: Map<number, number>,
   prices: Record<number, string>,
-  source: Record<number, PiStockSource>,
 ): PiValueSplit {
-  return valueBySource(group.items, stock, prices, source);
+  return valueBySource(group.items, stock, marketQty, prices);
 }
 
 /** 全部等级的价值拆分 */
 export function totalValueBySource(
   stock: Map<number, number>,
+  marketQty: Map<number, number>,
   prices: Record<number, string>,
-  source: Record<number, PiStockSource>,
 ): PiValueSplit {
   return valueBySource(
     PI_INVENTORY_GROUPS.flatMap((group) => group.items),
     stock,
+    marketQty,
     prices,
-    source,
   );
+}
+
+/** 库存 + 市场数量 = 本次可用的总数量（合成抵扣用） */
+export function mergeQuantities(
+  stock: Map<number, number>,
+  marketQty: Map<number, number>,
+): Map<number, number> {
+  const merged = new Map(stock);
+  for (const [typeId, quantity] of marketQty) {
+    if (quantity <= 0) continue;
+    merged.set(typeId, (merged.get(typeId) ?? 0) + quantity);
+  }
+  return merged;
 }

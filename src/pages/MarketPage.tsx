@@ -480,6 +480,7 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
         {/* 滚动交给面板内部的表格区，这里只做高度传递 */}
         <TabsContent
           value="orders"
+          forceMount
           className="mt-4 flex min-h-0 flex-col data-[state=inactive]:hidden"
         >
           <CharacterOrdersPanel

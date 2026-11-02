@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, Search } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  BellRing,
+  Clock,
+  RefreshCw,
+  Search,
+} from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +27,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
@@ -28,15 +41,13 @@ import {
   getCharacterOrderStats,
   listCharacterOrders,
   listMyOrderMarketPrices,
-  saveCharacterOrders,
   type CharacterOrderStats,
   type CharacterOrderView,
   type EveCharacter,
   type OrderMarketPrice,
-  type OrdersPayload,
 } from "@/lib/db";
-import { describeError } from "@/hooks/useCharacters";
 import { formatOrderRange } from "@/lib/order-labels";
+import { AUTO_SYNC_OPTIONS, useOrderSyncStore } from "@/stores/order-sync-store";
 
 /** 判断自己的挂单在同建筑里的价格位置 */
 function competitionLabel(
@@ -64,6 +75,32 @@ function competitionLabel(
     })}`,
     tone: "warn",
   };
+}
+
+/** 自动同步倒计时：独立组件，避免整张订单表每秒重渲染 */
+function AutoSyncCountdown({ nextAt }: { nextAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const remain = Math.max(0, nextAt - now);
+  const minutes = Math.floor(remain / 60_000);
+  const seconds = Math.floor((remain % 60_000) / 1000);
+  const urgent = remain <= 60_000;
+
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        urgent ? "text-amber-300" : "opacity-70",
+      )}
+    >
+      {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+    </span>
+  );
 }
 
 function formatIskShort(value: number): string {
@@ -239,15 +276,30 @@ export default function CharacterOrdersPanel({
     Record<number, Record<string, OrderMarketPrice>>
   >({});
 
-  const [syncingId, setSyncingId] = useState<number | null>(null);
-  const [syncingAll, setSyncingAll] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // 同步状态与定时器都在 store 里：切到别的菜单也不会中断
+  const syncingId = useOrderSyncStore((state) => state.syncingId);
+  const syncingAll = useOrderSyncStore((state) => state.syncingAll);
+  const autoSync = useOrderSyncStore((state) => state.autoSync);
+  const intervalMinutes = useOrderSyncStore((state) => state.intervalMinutes);
+  const nextSyncAt = useOrderSyncStore((state) => state.nextSyncAt);
+  const undercutCount = useOrderSyncStore((state) => state.undercutCount);
+  const lastCacheExpiresAt = useOrderSyncStore(
+    (state) => state.lastCacheExpiresAt,
+  );
+  const error = useOrderSyncStore((state) => state.lastError);
+  const revision = useOrderSyncStore((state) => state.revision);
+  const toggleAutoSync = useOrderSyncStore((state) => state.toggleAutoSync);
+  const setIntervalMinutes = useOrderSyncStore(
+    (state) => state.setIntervalMinutes,
+  );
+  const syncOrders = useOrderSyncStore((state) => state.sync);
   /** 当前查看的角色 tab */
   const [activeTab, setActiveTab] = useState<string>("");
   /** 物品名称/ID 查询：跨角色保留，方便对比同一件物品 */
   const [keyword, setKeyword] = useState("");
   /** 排序列：null 表示沿用后端的默认顺序 */
   const [sort, setSort] = useState<OrderSort | null>(null);
+
 
   /** 点击表头：升序 → 降序 → 取消排序 */
   const toggleSort = (key: OrderSortKey) => {
@@ -306,51 +358,17 @@ export default function CharacterOrdersPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [characterIds]);
 
+  // 首次进入读库；同步完成（revision 变化）后重新读
   useEffect(() => {
     void loadAll();
-  }, [loadAll]);
+  }, [loadAll, revision]);
 
-  const syncOne = async (characterId: number): Promise<number> => {
-    const payload = await invoke<OrdersPayload>("sync_character_orders", {
-      characterId,
-    });
-    await saveCharacterOrders(characterId, payload.orders, payload.fetchedAt);
-    return payload.orders.length;
+  const handleSync = (characterId: number) => {
+    void syncOrders([characterId]);
   };
 
-  const handleSync = async (characterId: number) => {
-    setSyncingId(characterId);
-    setError(null);
-    try {
-      const count = await syncOne(characterId);
-      await loadAll();
-      toast.success(`已同步 ${count.toLocaleString()} 条订单`);
-    } catch (err) {
-      setError(describeError(err));
-    } finally {
-      setSyncingId(null);
-    }
-  };
-
-  const handleSyncAll = async () => {
-    setSyncingAll(true);
-    setError(null);
-
-    let succeeded = 0;
-    for (const character of characters) {
-      setSyncingId(character.character_id);
-      try {
-        await syncOne(character.character_id);
-        succeeded += 1;
-      } catch (err) {
-        setError(`${character.name}：${describeError(err)}`);
-      }
-    }
-
-    setSyncingId(null);
-    setSyncingAll(false);
-    await loadAll();
-    toast.success(`同步完成：成功 ${succeeded} / ${characters.length}`);
+  const handleSyncAll = () => {
+    void syncOrders(characters.map((item) => item.character_id));
   };
 
   if (characters.length === 0) {
@@ -395,12 +413,67 @@ export default function CharacterOrdersPanel({
           })}
         </TabsList>
 
+        {undercutCount > 0 && (
+          <Badge variant="destructive" className="gap-1 text-[10px]">
+            <BellRing className="size-3" />
+            {undercutCount} 笔被压价
+          </Badge>
+        )}
+
         <Button
           variant="outline"
           size="sm"
-          className="ml-auto"
+          className={cn(
+            "ml-auto h-8 gap-1.5 text-xs",
+            autoSync && "border-emerald-500/40 text-emerald-300",
+          )}
+          onClick={() => toggleAutoSync()}
+          title={
+            autoSync
+              ? `每 ${intervalMinutes} 分钟自动同步一次（含建筑行情与压价提醒），点击关闭`
+              : "点击开启自动同步"
+          }
+        >
+          <Clock className={cn("size-3.5", !autoSync && "opacity-50")} />
+          {autoSync ? (
+            <>
+              自动同步
+              {nextSyncAt !== null && <AutoSyncCountdown nextAt={nextSyncAt} />}
+            </>
+          ) : (
+            "自动同步已关"
+          )}
+        </Button>
+
+        <Select
+          value={String(intervalMinutes)}
+          onValueChange={(value) => setIntervalMinutes(Number(value))}
+          disabled={!autoSync}
+        >
+          <SelectTrigger
+            size="sm"
+            className="h-8 w-[92px] text-xs"
+            title="自动同步间隔（最短 20 分钟）"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {/* 把当前值也并进选项，避免历史设置不在预设里时显示空白 */}
+            {[...new Set<number>([...AUTO_SYNC_OPTIONS, intervalMinutes])]
+              .sort((a, b) => a - b)
+              .map((minutes) => (
+                <SelectItem key={minutes} value={String(minutes)}>
+                  {minutes} 分钟
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+
+        <Button
+          variant="outline"
+          size="sm"
           disabled={syncingAll}
-          onClick={() => void handleSyncAll()}
+          onClick={() => handleSyncAll()}
         >
           <RefreshCw className={syncingAll ? "animate-spin" : undefined} />
           {syncingAll ? "同步中…" : "同步全部角色"}
@@ -442,6 +515,20 @@ export default function CharacterOrdersPanel({
                     : `${allOrders.length} 笔挂单`}
                 </span>
 
+                {lastCacheExpiresAt !== null &&
+                  lastCacheExpiresAt > Date.now() && (
+                    <span
+                      className="text-[11px] text-amber-300/80"
+                      title="ESI 对订单接口有约 20 分钟缓存，缓存期内重新同步不会拿到新数据"
+                    >
+                      ESI 缓存至{" "}
+                      {new Date(lastCacheExpiresAt).toLocaleTimeString("zh-CN", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  )}
+
                 <div className="relative w-56">
                   <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -456,7 +543,7 @@ export default function CharacterOrdersPanel({
                   size="sm"
                   className="ml-auto"
                   disabled={busy || syncingAll}
-                  onClick={() => void handleSync(character.character_id)}
+                  onClick={() => handleSync(character.character_id)}
                 >
                   {busy ? "同步中…" : "同步该角色"}
                 </Button>

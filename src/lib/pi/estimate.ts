@@ -1,7 +1,7 @@
 import { PI_PRODUCTS } from "@/lib/pi/data";
-import type { PiStockSource } from "@/lib/pi/inventory";
+import { mergeQuantities } from "@/lib/pi/inventory";
 import { buildChainPlan } from "@/lib/pi/schematic";
-import { synthesizeMax } from "@/lib/pi/synthesis";
+import { evaluateSynthesis, synthesizeMax } from "@/lib/pi/synthesis";
 import type { PiPriceRow, PiTier } from "@/lib/pi/types";
 
 /** 单个产物的成本/收益估算（口径：1 条产线满负荷 1 小时） */
@@ -15,8 +15,12 @@ export interface PiProductCost {
   buyCount: number;
   /** 用库存抵扣的原料件数 */
   stockCount: number;
-  /** 缺价时为 null */
+  /** 总成本 = 库存成本 + 市场成本（缺价时为 null） */
   cost: number | null;
+  /** 消耗库存原料的估值 */
+  stockCost: number | null;
+  /** 从市场补货的支出 */
+  marketCost: number | null;
   revenue: number | null;
   profit: number | null;
   margin: number | null;
@@ -26,43 +30,80 @@ export interface PiProductCost {
   revenueIncomplete: boolean;
 }
 
+/** 取该物品的单件价格：P0 用最低卖单，其余用最高买单 */
+function unitPrice(
+  priceRows: Map<number, PiPriceRow>,
+  typeId: number,
+): number | null {
+  const row = priceRows.get(typeId);
+  return row?.sell ?? row?.buy ?? null;
+}
+
 /**
  * 估算单个产物的成本与收益。
  *
- * 标「库存」的原料优先抵扣且不计成本；标「购买」的原料全部按行情卖单价买入。
- * 产物按行情买单价卖出。
+ * 可用量 = 库存 + 计划从市场买入的数量，两者都优先抵扣（库存先扣）。
+ * - 库存成本：被消耗的库存物料（P0~P3 各级）按其行情价折算；
+ * - 市场成本：被消耗的市场物料 + P0 缺口（中间品默认自制，缺口最终落在 P0）。
+ *
+ * 中间品不重复计价：某层有缺口时，只把「造它所需的下层 P0 缺口」计入成本，
+ * 不会同时把该层成品价格也算一遍。
+ * 产物按行情买单卖出。
  */
 export function estimateProductCost(
   typeId: number,
   priceRows: Map<number, PiPriceRow>,
   stock: Map<number, number>,
-  source: Record<number, PiStockSource>,
+  marketQty: Map<number, number> = new Map(),
 ): PiProductCost | null {
   const plan = buildChainPlan(typeId);
   if (!plan) return null;
 
-  let cost = 0;
+  // 按 1 小时产线的周期数核算各级需求，库存 + 市场数量一起抵扣
+  const detail = evaluateSynthesis(
+    mergeQuantities(stock, marketQty),
+    typeId,
+    plan.cycles,
+  );
+
+  let stockCost = 0;
+  let marketCost = 0;
   let buyCount = 0;
   let stockCount = 0;
   let costIncomplete = false;
 
-  for (const item of plan.purchases) {
-    const required = item.quantity;
-    const usable =
-      (source[item.typeId] ?? "buy") === "stock"
-        ? Math.min(stock.get(item.typeId) ?? 0, required)
-        : 0;
-    const toBuy = Math.max(0, required - usable);
+  // 被抵扣的各级物料：先扣库存，再扣市场采购的数量
+  for (const line of [...detail.lines, ...detail.p0]) {
+    // 目标产物本身是产出，不算原料
+    if (line.typeId === typeId || line.fromStock <= 0) continue;
 
-    stockCount += usable;
-    buyCount += toBuy;
+    const stockAvail = stock.get(line.typeId) ?? 0;
+    const useStock = Math.min(stockAvail, line.fromStock);
+    const useMarket = line.fromStock - useStock;
 
-    const unit = priceRows.get(item.typeId)?.sell;
-    if (unit === null || unit === undefined) {
-      if (toBuy > 0) costIncomplete = true;
+    const unit = unitPrice(priceRows, line.typeId);
+    if (unit === null) {
+      costIncomplete = true;
       continue;
     }
-    cost += unit * toBuy;
+
+    stockCost += unit * useStock;
+    marketCost += unit * useMarket;
+    stockCount += useStock;
+    buyCount += useMarket;
+  }
+
+  // P0 缺口：中间品自制，所以缺口只买原始资源
+  for (const line of detail.p0) {
+    if (line.remaining <= 0) continue;
+
+    const unit = unitPrice(priceRows, line.typeId);
+    if (unit === null) {
+      costIncomplete = true;
+      continue;
+    }
+    marketCost += unit * line.remaining;
+    buyCount += line.remaining;
   }
 
   const rootStep = plan.steps.find(
@@ -73,7 +114,7 @@ export function estimateProductCost(
   const revenueIncomplete = sellUnit === null;
   const revenue = sellUnit === null ? null : sellUnit * outputQty;
 
-  const finalCost = costIncomplete ? null : cost;
+  const finalCost = costIncomplete ? null : stockCost + marketCost;
   const profit =
     finalCost !== null && revenue !== null ? revenue - finalCost : null;
   const margin =
@@ -89,6 +130,8 @@ export function estimateProductCost(
     buyCount,
     stockCount,
     cost: finalCost,
+    stockCost: costIncomplete ? null : stockCost,
+    marketCost: costIncomplete ? null : marketCost,
     revenue,
     profit,
     margin,
@@ -102,10 +145,12 @@ export function estimateTierProducts(
   tier: PiTier,
   priceRows: Map<number, PiPriceRow>,
   stock: Map<number, number>,
-  source: Record<number, PiStockSource>,
+  marketQty: Map<number, number> = new Map(),
 ): PiProductCost[] {
   return PI_PRODUCTS.filter((product) => product.tier === tier)
-    .map((product) => estimateProductCost(product.typeId, priceRows, stock, source))
+    .map((product) =>
+      estimateProductCost(product.typeId, priceRows, stock, marketQty),
+    )
     .filter((item): item is PiProductCost => item !== null)
     .sort((a, b) => {
       const marginA = a.margin ?? Number.NEGATIVE_INFINITY;
