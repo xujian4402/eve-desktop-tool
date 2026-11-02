@@ -326,6 +326,23 @@ export function PiInventoryPanel({
                         </label>
                         <div className="flex items-end gap-1">
                           <label className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span className="text-[9px] leading-none text-emerald-300/70">
+                              库存数量
+                            </span>
+                            <Input
+                              value={
+                                stockDraft[item.typeId] ??
+                                (stockQty > 0 ? String(stockQty) : "")
+                              }
+                              onChange={(event) =>
+                                onStockChange(item.typeId, event.target.value)
+                              }
+                              inputMode="numeric"
+                              title="库存里已有的数量（优先抵扣，不计成本）"
+                              className="h-6 min-w-0 px-1 text-right text-[11px] text-emerald-300/90"
+                            />
+                          </label>
+                          <label className="flex min-w-0 flex-1 flex-col gap-0.5">
                             <span className="text-[9px] leading-none text-amber-300/70">
                               市场数量
                             </span>
@@ -345,23 +362,6 @@ export function PiInventoryPanel({
                               className="h-6 min-w-0 px-1 text-right text-[11px] text-amber-300/90"
                             />
                           </label>
-                          <label className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="text-[9px] leading-none text-emerald-300/70">
-                              库存数量
-                            </span>
-                            <Input
-                              value={
-                                stockDraft[item.typeId] ??
-                                (stockQty > 0 ? String(stockQty) : "")
-                              }
-                              onChange={(event) =>
-                                onStockChange(item.typeId, event.target.value)
-                              }
-                              inputMode="numeric"
-                              title="库存里已有的数量（优先抵扣，不计成本）"
-                              className="h-6 min-w-0 px-1 text-right text-[11px] text-emerald-300/90"
-                            />
-                          </label>
                         </div>
                       </>
                     )}
@@ -372,47 +372,65 @@ export function PiInventoryPanel({
             </div>
           </div>
 
-          {group.tier === 4 ? (
-            <p className="mt-1 flex shrink-0 flex-wrap items-center justify-end gap-x-3 text-[11px] text-muted-foreground/70">
-              <span>
-                P4 高级材料只做价格与数量参考，不计入库存价值、采购成本与收益
-              </span>
-              <span className="text-muted-foreground/50">
-                共 {group.items.length} 项
-              </span>
-            </p>
-          ) : (
-            (() => {
-              const split = groupValueBySource(
-                group,
-                stock,
-                marketQty,
-                prices,
-              );
-              return (
-                <p className="mt-1 flex shrink-0 flex-wrap items-center justify-end gap-x-3 text-[11px] text-muted-foreground/80">
-                  <span>
-                    {group.label} 库存价值{" "}
-                    <b className="font-mono tabular-nums text-emerald-300/90">
-                      {isk(split.stockValue)}
-                    </b>
-                  </span>
-                  <span>
-                    市场采购{" "}
-                    <b className="font-mono tabular-nums text-amber-300/90">
-                      {isk(split.buyValue)}
-                    </b>
-                  </span>
-                  <span className="text-muted-foreground/60">
-                    ISK · 共 {group.items.length} 项
-                  </span>
-                </p>
-              );
-            })()
-          )}
         </TabsContent>
         ))}
       </Tabs>
+
+      {/* 全等级统计：P0~P4 的库存价值 / 市场采购，外加合计 */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border/60 bg-card/30 px-2 py-1.5 text-[11px]">
+        {PI_INVENTORY_GROUPS.map((group) => {
+          const split = groupValueBySource(group, stock, marketQty, prices);
+          const readonly = group.tier === 4;
+
+          return (
+            <span
+              key={group.tier}
+              className="flex items-center gap-1.5"
+              title={
+                readonly
+                  ? "P4 只做参考展示，不计入统计"
+                  : "库存价值 / 市场采购（ISK）"
+              }
+            >
+              <span className="text-muted-foreground/80">
+                {piTierLabel(group.tier)}
+              </span>
+              {readonly ? (
+                <span className="text-muted-foreground/50">只读</span>
+              ) : (
+                <>
+                  <b className="font-mono tabular-nums text-emerald-300/90">
+                    {isk(split.stockValue)}
+                  </b>
+                  <span className="text-muted-foreground/40">/</span>
+                  <b className="font-mono tabular-nums text-amber-300/90">
+                    {isk(split.buyValue)}
+                  </b>
+                </>
+              )}
+            </span>
+          );
+        })}
+
+        <span className="ml-auto flex items-center gap-1.5 border-l border-border/60 pl-3">
+          <span className="text-muted-foreground">合计</span>
+          {(() => {
+            const total = totalValueBySource(stock, marketQty, prices);
+            return (
+              <>
+                <b className="font-mono tabular-nums text-emerald-400">
+                  {isk(total.stockValue)}
+                </b>
+                <span className="text-muted-foreground/40">/</span>
+                <b className="font-mono tabular-nums text-amber-300">
+                  {isk(total.buyValue)}
+                </b>
+                <span className="text-muted-foreground/50">ISK</span>
+              </>
+            );
+          })()}
+        </span>
+      </div>
     </div>
   );
 }

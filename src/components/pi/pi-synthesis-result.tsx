@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -28,14 +28,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PI_PRODUCTS } from "@/lib/pi/data";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { PI_PRODUCTS, piTypeName } from "@/lib/pi/data";
 import {
   estimateCap,
   estimateTierProducts,
   type PiProductCost,
 } from "@/lib/pi/estimate";
 import { mergeQuantities, piTierLabel } from "@/lib/pi/inventory";
-import { synthesizeMax } from "@/lib/pi/synthesis";
+import { PI_RECIPE_MAP, synthesizeMax } from "@/lib/pi/synthesis";
 import type { PiPriceRow, PiTier } from "@/lib/pi/types";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +60,57 @@ function priceText(
 }
 
 const TIERS: PiTier[] = [4, 3, 2, 1];
+
+/** 悬停产物名称时展示该产物的合成配方（所需原料与数量） */
+function RecipeHover({
+  typeId,
+  children,
+}: {
+  typeId: number;
+  children: ReactNode;
+}) {
+  const recipe = PI_RECIPE_MAP.get(typeId);
+  if (!recipe) return <>{children}</>;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help underline decoration-dotted decoration-border underline-offset-2">
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent
+        side="right"
+        align="start"
+        sideOffset={6}
+        className="max-w-72 border border-border bg-popover p-2 text-popover-foreground shadow-lg"
+      >
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] font-medium">{recipe.name}</span>
+            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+              产出 {recipe.outputPerCycle} / {Math.round(recipe.cycleTime / 60)} 分钟
+            </span>
+          </div>
+          <div className="text-[10px] text-muted-foreground">{recipe.facility}</div>
+          <div className="mt-0.5 flex flex-col gap-0.5">
+            {recipe.inputs.map((input) => (
+              <div
+                key={input.typeId}
+                className="flex items-center justify-between gap-4 text-[11px]"
+              >
+                <span className="truncate">{piTypeName(input.typeId)}</span>
+                <span className="shrink-0 font-mono tabular-nums text-amber-300">
+                  ×{input.quantity}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 /**
  * 排序：读过库存后按「库存可合成」降序排在最前（能立刻做的先看到），
@@ -376,6 +433,7 @@ export function PiSynthesisResult({
   );
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <Tabs
         value={view}
@@ -572,7 +630,9 @@ export function PiSynthesisResult({
             >
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-t-lg border border-b-0 border-border bg-muted/40 px-3 py-2 text-xs">
                 <span className="font-medium text-foreground/90">
-                  {result.targetName}
+                  <RecipeHover typeId={result.targetTypeId}>
+                    {result.targetName}
+                  </RecipeHover>
                 </span>
                 <span className="text-muted-foreground">
                   库存可合成{" "}
@@ -851,7 +911,7 @@ export function PiSynthesisResult({
                   {orderByCap(group.items, caps, hasStock).map((item) => (
                     <TableRow key={item.typeId}>
                       <TableCell>
-                        <span className="block">{item.name}</span>
+                        <RecipeHover typeId={item.typeId}>{item.name}</RecipeHover>
                         <span className="block font-mono text-[10px] text-muted-foreground/60">
                           {item.typeId}
                         </span>
@@ -1036,6 +1096,7 @@ export function PiSynthesisResult({
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
   );
 }
 
