@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,7 @@ import {
 import { PI_PRODUCTS, piTypeName } from "@/lib/pi/data";
 import {
   estimateCap,
+  estimateProductCost,
   estimateTierProducts,
   type PiProductCost,
 } from "@/lib/pi/estimate";
@@ -141,12 +142,15 @@ export function PiSynthesisResult({
   priceRows,
   stock,
   marketQty,
+  sellPrices,
 }: {
   priceRows: Map<number, PiPriceRow>;
   /** 库存里已有的数量（优先抵扣，不计成本） */
   stock: Map<number, number>;
   /** 计划从市场买入的数量（可用但按行情价计成本） */
   marketQty: Map<number, number>;
+  /** 刷新行情时记下的最低卖价（收入口径可选） */
+  sellPrices: Record<number, number>;
 }) {
   const [tier, setTier] = useState<string>("4");
   /** 下半部分视图：默认收益（全量分级）/ 指定产物收益 */
@@ -157,6 +161,24 @@ export function PiSynthesisResult({
   const [activeFocus, setActiveFocus] = useState<string>("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [keyword, setKeyword] = useState("");
+  /** 统计口径：1 小时产线 / 全部可合成数量 */
+  const [timeScope, setTimeScope] = useState<"hour" | "all">("hour");
+  /** 收入单价：最低卖价（默认，偏保守）/ 最高买价 */
+  const [revenueSide, setRevenueSide] = useState<"sell" | "buy">("sell");
+
+  /** 按选择的口径取产物收入单价 */
+  const revenueUnit = useCallback(
+    (typeId: number): number | null => {
+      const row = priceRows.get(typeId);
+      if (revenueSide === "sell") {
+        const lowest = sellPrices[typeId];
+        if (lowest !== undefined && lowest > 0) return lowest;
+        return row?.sell ?? row?.buy ?? null;
+      }
+      return row?.buy ?? row?.sell ?? null;
+    },
+    [priceRows, sellPrices, revenueSide],
+  );
 
   /** 可合成上限用的可用量：库存 + 计划从市场买入的数量 */
   const stockForSynthesis = useMemo(
@@ -165,15 +187,23 @@ export function PiSynthesisResult({
   );
 
   const hasStock = stockForSynthesis.size > 0;
+  /** 是否已有刷新行情得到的最低卖价 */
+  const hasSellPrices = Object.keys(sellPrices).length > 0;
 
   /** 1 小时成本：库存与市场数量都参与抵扣，分别计入库存成本 / 市场成本 */
   const rows = useMemo(
     () =>
       TIERS.map((item) => ({
         tier: item,
-        items: estimateTierProducts(item, priceRows, stock, marketQty),
+        items: estimateTierProducts(
+          item,
+          priceRows,
+          stock,
+          marketQty,
+          revenueUnit,
+        ),
       })),
-    [priceRows, stock, marketQty],
+    [priceRows, stock, marketQty, revenueUnit],
   );
 
   /** 库存可合成数（依赖库存而非价格，单独计算） */
@@ -224,10 +254,33 @@ export function PiSynthesisResult({
 
 
 
-  /** 指定产物的收入 / 采购成本 / 利润汇总（产物按最高买单，P0 按最低卖单） */
+  /** 指定产物的收入 / 采购成本 / 利润汇总（收入单价随口径切换） */
   const focusTotals = useMemo(() => {
     const items = focusResults.map((result) => {
-      const sellUnit = priceRows.get(result.targetTypeId)?.buy ?? null;
+      // 1 小时口径：与默认收益一致，直接取单条产线的产出与成本
+      if (timeScope === "hour") {
+        const est = estimateProductCost(
+          result.targetTypeId,
+          priceRows,
+          stock,
+          marketQty,
+          revenueUnit,
+        );
+
+        return {
+          targetTypeId: result.targetTypeId,
+          targetName: result.targetName,
+          output: est?.outputQty ?? 0,
+          sellUnit: revenueUnit(result.targetTypeId),
+          revenue: est?.revenue ?? null,
+          cost: est?.cost ?? null,
+          profit: est?.profit ?? null,
+          margin: est?.margin ?? null,
+          estimated: false,
+        };
+      }
+
+      const sellUnit = revenueUnit(result.targetTypeId);
       const revenue = sellUnit === null ? null : sellUnit * result.output;
 
       /**
@@ -303,7 +356,7 @@ export function PiSynthesisResult({
       margin:
         cost !== null && cost > 0 && profit !== null ? profit / cost : null,
     };
-  }, [focusResults, priceRows]);
+  }, [focusResults, priceRows, timeScope, revenueUnit, stock, marketQty]);
 
   /**
    * 当前选择产物的库存价值：
@@ -435,6 +488,66 @@ export function PiSynthesisResult({
   return (
     <TooltipProvider delayDuration={150}>
     <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {/* 统计口径与收入价 */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 text-[11px]">
+        <span className="text-muted-foreground">口径</span>
+        <div className="inline-flex overflow-hidden rounded border border-border">
+          {(
+            [
+              ["hour", "1 小时"],
+              ["all", "全部时间"],
+            ] as const
+          ).map(([value, label], index) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setTimeScope(value)}
+              className={cn(
+                "px-2 py-1 transition-colors",
+                index > 0 && "border-l border-border",
+                timeScope === value
+                  ? "bg-cyan-500/20 text-cyan-300"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <span className="ml-1 text-muted-foreground">收入</span>
+        <div className="inline-flex overflow-hidden rounded border border-border">
+          {(
+            [
+              ["sell", "最低卖价"],
+              ["buy", "最高买价"],
+            ] as const
+          ).map(([value, label], index) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setRevenueSide(value)}
+              className={cn(
+                "px-2 py-1 transition-colors",
+                index > 0 && "border-l border-border",
+                revenueSide === value
+                  ? "bg-emerald-500/20 text-emerald-300"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-[10px] text-muted-foreground/60">
+          {timeScope === "all"
+            ? "收入/成本按可合成总量折算"
+            : "收入/成本按一条产线满负荷 1 小时估算"}
+          {revenueSide === "sell" && !hasSellPrices && "（未刷新行情，暂用填写的单价）"}
+        </span>
+      </div>
+
       <Tabs
         value={view}
         onValueChange={(value) => setView(value as "default" | "focus")}
@@ -897,7 +1010,9 @@ export function PiSynthesisResult({
                     {hasStock && (
                       <TableHead className="text-right">库存可合成</TableHead>
                     )}
-                    <TableHead className="text-right">1h 产出</TableHead>
+                    <TableHead className="text-right">
+                      {timeScope === "all" ? "全部产出" : "1h 产出"}
+                    </TableHead>
                     <TableHead className="text-right">库存成本</TableHead>
                     <TableHead className="text-right">市场成本</TableHead>
                     <TableHead className="text-right">总成本</TableHead>
@@ -908,95 +1023,112 @@ export function PiSynthesisResult({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {orderByCap(group.items, caps, hasStock).map((item) => (
-                    <TableRow key={item.typeId}>
-                      <TableCell>
-                        <RecipeHover typeId={item.typeId}>{item.name}</RecipeHover>
-                        <span className="block font-mono text-[10px] text-muted-foreground/60">
-                          {item.typeId}
-                        </span>
-                      </TableCell>
-                      {hasStock && (
-                        <TableCell className="text-right tabular-nums">
-                          {caps.get(item.typeId) ?? 0}
+                  {orderByCap(group.items, caps, hasStock).map((item) => {
+                    const cap = caps.get(item.typeId) ?? 0;
+                    // 1 小时口径直接用单条产线数据；全部时间口径按可合成总量折算
+                    const scale = timeScope === "all" ? cap : item.outputQty;
+                    const factor =
+                      item.outputQty > 0 ? scale / item.outputQty : 0;
+
+                    const stockCost =
+                      item.stockCost === null ? null : item.stockCost * factor;
+                    const marketCost =
+                      item.marketCost === null ? null : item.marketCost * factor;
+                    const cost = item.cost === null ? null : item.cost * factor;
+                    const revenue =
+                      item.revenue === null ? null : item.revenue * factor;
+                    const profit =
+                      revenue !== null && cost !== null ? revenue - cost : null;
+                    const margin =
+                      cost !== null && cost > 0 && profit !== null
+                        ? profit / cost
+                        : null;
+                    const aggregatedProfit =
+                      scale > 0 && profit !== null
+                        ? (profit / scale) * cap
+                        : null;
+
+                    return (
+                      <TableRow key={item.typeId}>
+                        <TableCell>
+                          <RecipeHover typeId={item.typeId}>
+                            {item.name}
+                          </RecipeHover>
+                          <span className="block font-mono text-[10px] text-muted-foreground/60">
+                            {item.typeId}
+                          </span>
                         </TableCell>
-                      )}
-                      <TableCell className="text-right tabular-nums">
-                        {item.outputQty.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-emerald-400/90">
-                        {item.stockCost === null
-                          ? item.costIncomplete
-                            ? "缺原料价"
-                            : "—"
-                          : isk(item.stockCost)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-amber-300/90">
-                        {item.marketCost === null
-                          ? item.costIncomplete
-                            ? "缺原料价"
-                            : "—"
-                          : isk(item.marketCost)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {item.cost === null
-                          ? item.costIncomplete
-                            ? "缺原料价"
-                            : "—"
-                          : isk(item.cost)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {item.revenue === null
-                          ? item.revenueIncomplete
-                            ? "未定价"
-                            : "—"
-                          : isk(item.revenue)}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "text-right tabular-nums",
-                          item.profit === null
-                            ? "text-muted-foreground/60"
-                            : item.profit >= 0
-                              ? "text-emerald-400"
-                              : "text-rose-400",
+                        {hasStock && (
+                          <TableCell className="text-right tabular-nums">
+                            {cap}
+                          </TableCell>
                         )}
-                      >
-                        {item.profit === null ? "—" : isk(item.profit)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {item.margin === null
-                          ? "—"
-                          : `${(item.margin * 100).toFixed(1)}%`}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {(() => {
-                          const cap = caps.get(item.typeId) ?? 0;
-                          if (
-                            !hasStock ||
-                            cap <= 0 ||
-                            item.profit === null ||
-                            item.outputQty <= 0
-                          ) {
-                            return (
-                              <span className="text-muted-foreground/50">—</span>
-                            );
-                          }
-                          const total = (item.profit / item.outputQty) * cap;
-                          return (
+                        <TableCell className="text-right tabular-nums">
+                          {scale.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-emerald-400/90">
+                          {stockCost === null
+                            ? item.costIncomplete
+                              ? "缺原料价"
+                              : "—"
+                            : isk(stockCost)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-amber-300/90">
+                          {marketCost === null
+                            ? item.costIncomplete
+                              ? "缺原料价"
+                              : "—"
+                            : isk(marketCost)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {cost === null
+                            ? item.costIncomplete
+                              ? "缺原料价"
+                              : "—"
+                            : isk(cost)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {revenue === null
+                            ? item.revenueIncomplete
+                              ? "未定价"
+                              : "—"
+                            : isk(revenue)}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            "text-right tabular-nums",
+                            profit === null
+                              ? "text-muted-foreground/60"
+                              : profit >= 0
+                                ? "text-emerald-400"
+                                : "text-rose-400",
+                          )}
+                        >
+                          {profit === null ? "—" : isk(profit)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {margin === null
+                            ? "—"
+                            : `${(margin * 100).toFixed(1)}%`}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {!hasStock || cap <= 0 || aggregatedProfit === null ? (
+                            <span className="text-muted-foreground/50">—</span>
+                          ) : (
                             <span
                               className={cn(
-                                total >= 0 ? "text-emerald-400" : "text-rose-400",
+                                aggregatedProfit >= 0
+                                  ? "text-emerald-400"
+                                  : "text-rose-400",
                               )}
                             >
-                              {isk(total)}
+                              {isk(aggregatedProfit)}
                             </span>
-                          );
-                        })()}
-                      </TableCell>
-
-                    </TableRow>
-                  ))}
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

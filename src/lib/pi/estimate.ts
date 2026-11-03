@@ -55,6 +55,8 @@ export function estimateProductCost(
   priceRows: Map<number, PiPriceRow>,
   stock: Map<number, number>,
   marketQty: Map<number, number> = new Map(),
+  /** 产物收入单价（默认取最高买单） */
+  revenueUnit?: (typeId: number) => number | null,
 ): PiProductCost | null {
   const plan = buildChainPlan(typeId);
   if (!plan) return null;
@@ -110,7 +112,9 @@ export function estimateProductCost(
     (step) => step.outputTypeId === plan.rootTypeId,
   );
   const outputQty = rootStep?.totalOutput ?? 0;
-  const sellUnit = priceRows.get(typeId)?.buy ?? null;
+  const sellUnit = revenueUnit
+    ? revenueUnit(typeId)
+    : (priceRows.get(typeId)?.buy ?? null);
   const revenueIncomplete = sellUnit === null;
   const revenue = sellUnit === null ? null : sellUnit * outputQty;
 
@@ -146,10 +150,17 @@ export function estimateTierProducts(
   priceRows: Map<number, PiPriceRow>,
   stock: Map<number, number>,
   marketQty: Map<number, number> = new Map(),
+  revenueUnit?: (typeId: number) => number | null,
 ): PiProductCost[] {
   return PI_PRODUCTS.filter((product) => product.tier === tier)
     .map((product) =>
-      estimateProductCost(product.typeId, priceRows, stock, marketQty),
+      estimateProductCost(
+        product.typeId,
+        priceRows,
+        stock,
+        marketQty,
+        revenueUnit,
+      ),
     )
     .filter((item): item is PiProductCost => item !== null)
     .sort((a, b) => {

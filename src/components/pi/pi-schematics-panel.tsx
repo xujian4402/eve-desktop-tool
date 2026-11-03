@@ -22,6 +22,7 @@ interface AssetTotals {
 }
 
 const PRICE_STORAGE_KEY = "pi-inventory-prices-v1";
+const SELL_PRICE_STORAGE_KEY = "pi-inventory-sell-prices-v1";
 const MARKET_QTY_STORAGE_KEY = "pi-inventory-market-qty-v1";
 const MARKET_STORAGE_KEY = "pi-inventory-market-v1";
 
@@ -54,6 +55,10 @@ export function PiSchematicsPanel() {
 
   const [prices, setPrices] = useState<Record<number, string>>(() =>
     readStorage<Record<number, string>>(PRICE_STORAGE_KEY, {}),
+  );
+  /** 刷新行情时一并记下的「最低卖价」，供收入口径选择使用 */
+  const [sellPrices, setSellPrices] = useState<Record<number, number>>(() =>
+    readStorage<Record<number, number>>(SELL_PRICE_STORAGE_KEY, {}),
   );
   /** 计划从市场买入的数量（与库存数量分开录入，本地持久化） */
   const [marketQty, setMarketQty] = useState<Map<number, number>>(() => {
@@ -94,6 +99,14 @@ export function PiSchematicsPanel() {
       // 忽略存储失败
     }
   }, [prices]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SELL_PRICE_STORAGE_KEY, JSON.stringify(sellPrices));
+    } catch {
+      // 忽略存储失败
+    }
+  }, [sellPrices]);
 
   useEffect(() => {
     try {
@@ -289,17 +302,31 @@ export function PiSchematicsPanel() {
     try {
       const result = await fetchBestPrices(typeIds, { concurrency: 3 });
       const entries: Array<{ typeId: number; value: number }> = [];
+      const sellEntries: Array<{ typeId: number; value: number }> = [];
 
       for (const [typeId, best] of result.prices) {
         const value = P0_SET.has(typeId) ? best.sell : best.buy;
         if (value !== null && value > 0) {
           entries.push({ typeId, value: Math.round(value * 100) / 100 });
         }
+        // 最低卖价单独留一份：收入口径可以切换成「按最低卖价成交」
+        if (best.sell !== null && best.sell > 0) {
+          sellEntries.push({
+            typeId,
+            value: Math.round(best.sell * 100) / 100,
+          });
+        }
       }
 
       setPrices((current) => {
         const next = { ...current };
         for (const entry of entries) next[entry.typeId] = String(entry.value);
+        return next;
+      });
+
+      setSellPrices((current) => {
+        const next = { ...current };
+        for (const entry of sellEntries) next[entry.typeId] = entry.value;
         return next;
       });
 
@@ -426,6 +453,7 @@ export function PiSchematicsPanel() {
         priceRows={priceRows}
         stock={calcStock}
         marketQty={marketQty}
+        sellPrices={sellPrices}
       />
     </div>
   );
