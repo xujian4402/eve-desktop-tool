@@ -297,7 +297,7 @@ function AnalysisView({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto [&>*]:shrink-0">
       <section className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {[
           { label: "挂单笔数", value: totals.order_count.toLocaleString() },

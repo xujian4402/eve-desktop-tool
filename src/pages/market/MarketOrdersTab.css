@@ -1,0 +1,7 @@
+/* 我的订单：高度交给内部表格区，这里只做纵向 flex 传递 */
+.market-orders-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}

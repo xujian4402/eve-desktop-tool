@@ -1,0 +1,57 @@
+/* 同步市场订单：整页滚动（表单列表，不需要内部表格滚动） */
+.market-structures-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* 分区标题行 */
+.market-structures-tab__section {
+  margin-bottom: 32px;
+}
+
+.market-structures-tab__section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.market-structures-tab__section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(215 227 244 / 0.85);
+}
+
+/* 工具栏：录入建筑、进度、刷新、批量同步 */
+.market-structures-tab__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-structures-tab__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-structures-tab__progress-name {
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+/* 底部建筑管理区 */
+.market-structures-tab__manager {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid rgb(255 255 255 / 0.08);
+}

@@ -386,7 +386,7 @@ export default function StructureComparePanel() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto [&>*]:shrink-0">
       {/* 建筑选择 */}
       <section>
         <div className="mb-2 flex items-center gap-2">
@@ -482,7 +482,7 @@ export default function StructureComparePanel() {
       </section>
 
       {/* 单物品对比 */}
-      <section className="min-h-0 flex-1">
+      <section>
         {typeId === null ? (
           <Empty>
             <EmptyHeader>

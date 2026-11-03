@@ -1,0 +1,10 @@
+/*
+ * 市场对比：只做高度传递。
+ * 滚动交给内部面板统一处理，避免出现双层滚动导致内容错位。
+ */
+.market-compare-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}

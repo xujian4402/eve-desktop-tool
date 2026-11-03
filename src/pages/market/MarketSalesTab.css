@@ -1,0 +1,7 @@
+/* 销量分析：顶部工具条固定，下方两张榜单各自滚动 */
+.market-sales-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}

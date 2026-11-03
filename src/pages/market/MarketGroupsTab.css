@@ -1,0 +1,7 @@
+/* 交易市场：左侧分类树 + 右侧物品列表，整体撑满可用高度 */
+.market-groups-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}

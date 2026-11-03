@@ -1,0 +1,28 @@
+/* 市场页外壳：只负责高度传递，具体内容由各标签页自己管理 */
+.market-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* 每个标签页的内容区：撑满剩余高度，滚动交给内部 */
+.market-page__content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  margin-top: 16px;
+}
+
+/*
+ * 「我的订单」用了 forceMount 保持挂载，Radix 不会自动加 hidden。
+ * 这里显式隐藏非激活面板：必须写在 .market-page__content 之后，
+ * 否则上面的 display:flex 会盖掉 Tailwind 的 data-[state=inactive]:hidden。
+ */
+.market-page__content[data-state="inactive"] {
+  display: none;
+}

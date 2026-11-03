@@ -705,6 +705,83 @@ export async function listTypeOrders(
 
 /* ---------- 筛选用的物品类型集合 ---------- */
 
+export interface StructureSalesRow {
+  type_id: number;
+  type_name: string | null;
+  /** 已成交量（订单总量 − 剩余量），作为销量代理指标 */
+  sold_volume: number;
+  /** 仍挂在市场上的量 */
+  remain_volume: number;
+  order_count: number;
+  /** 按总量加权的平均挂单价 */
+  avg_price: number | null;
+  best_sell: number | null;
+  best_buy: number | null;
+}
+
+/** 市场顶层分类（用于销量分析过滤） */
+export interface MarketTopGroup {
+  market_group_id: number;
+  name: string;
+}
+
+export async function listMarketTopGroups(): Promise<MarketTopGroup[]> {
+  const db = await getDb();
+  return db.select<MarketTopGroup[]>(
+    `SELECT market_group_id, name
+       FROM market_group
+      WHERE parent_group_id IS NULL
+      ORDER BY name`,
+  );
+}
+
+/**
+ * 某个建筑内按物品汇总的「成交量」。
+ *
+ * ESI 没有星城级别的历史销量，这里用订单的「总量 − 剩余」近似：
+ * 它表示这些挂单自创建以来被吃掉的部分，能反映近期需求强弱。
+ */
+export async function listStructureSales(
+  structureId: number,
+  /** 市场顶层分类 ID；0 表示不按分类过滤 */
+  marketGroupId = 0,
+): Promise<StructureSalesRow[]> {
+  const db = await getDb();
+  return db.select<StructureSalesRow[]>(
+    `WITH RECURSIVE subtree(id) AS (
+       SELECT $2
+       UNION ALL
+       SELECT g.market_group_id
+         FROM market_group g
+         JOIN subtree s ON g.parent_group_id = s.id
+     )
+     SELECT o.type_id,
+            COALESCE(t.name_zh, t.name_en) AS type_name,
+            COALESCE(SUM(o.volume_total - o.volume_remain), 0) AS sold_volume,
+            COALESCE(SUM(o.volume_remain), 0) AS remain_volume,
+            COUNT(o.order_id) AS order_count,
+            CASE WHEN SUM(o.volume_total) > 0
+                 THEN SUM(o.price * o.volume_total) * 1.0 / SUM(o.volume_total)
+            END AS avg_price,
+            MIN(CASE WHEN o.is_buy_order = 0 THEN o.price END) AS best_sell,
+            MAX(CASE WHEN o.is_buy_order = 1 THEN o.price END) AS best_buy
+       FROM market_structure_order o
+       LEFT JOIN eve_type t ON t.type_id = o.type_id
+      WHERE o.structure_id = $1
+        AND (
+          $2 = 0
+          OR EXISTS (
+            SELECT 1
+              FROM market_type mt
+             WHERE mt.type_id = o.type_id
+               AND mt.market_group_id IN (SELECT id FROM subtree)
+          )
+        )
+      GROUP BY o.type_id, t.name_zh, t.name_en`,
+    [structureId, marketGroupId],
+  );
+}
+
 /** 某建筑内当前有订单的物品类型 ID */
 export async function listStructureTypeIds(
   structureId: number,

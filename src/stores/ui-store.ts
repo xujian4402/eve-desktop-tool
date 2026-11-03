@@ -2,13 +2,14 @@ import { create } from "zustand";
 
 export type AccountTab = "characters" | "assets" | "permissions";
 
-/** 市场页的标签页：交易市场 / 同步市场订单 / 我的订单 */
+/** 市场页的标签页：交易市场 / 同步市场订单 / 我的订单 / 销量分析 */
 export type MarketTab =
   | "groups"
   | "orders"
   | "analysis"
   | "compare"
-  | "structures";
+  | "structures"
+  | "sales";
 
 interface UiState {
   /** 个人中心当前标签（切换页面后保留） */
