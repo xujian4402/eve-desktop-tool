@@ -2,13 +2,15 @@ import { create } from "zustand";
 
 export type AccountTab = "characters" | "assets" | "permissions";
 
-/** 市场页的标签页：交易市场 / 同步市场订单 / 我的订单 / 销量分析 */
+/**
+ * 市场页的标签页：交易市场 / 我的订单 / 订单分析 / 市场差价对比 / 销量分析。
+ * 「同步市场订单」已改为标签行右侧的弹窗，不再是标签页。
+ */
 export type MarketTab =
   | "groups"
   | "orders"
   | "analysis"
   | "compare"
-  | "structures"
   | "sales";
 
 interface UiState {

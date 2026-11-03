@@ -1,5 +1,15 @@
+import { useState } from "react";
+import { Building2 } from "lucide-react";
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Empty,
   EmptyContent,
@@ -34,6 +44,8 @@ interface MarketPageProps {
 export default function MarketPage({ onNavigate }: MarketPageProps) {
   const { characters, activeCharacter, loading, loadError } = useCharacters();
   const { marketTab, setMarketTab, setPendingTypeId } = useUiStore();
+  /** 「同步市场订单」弹窗 */
+  const [structuresOpen, setStructuresOpen] = useState(false);
 
   const activeCharacterId = activeCharacter?.character_id ?? null;
 
@@ -86,14 +98,25 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
         onValueChange={(value) => setMarketTab(value as MarketTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="gap-1.5">
-          <TabsTrigger value="groups">交易市场</TabsTrigger>
-          <TabsTrigger value="compare">市场差价对比</TabsTrigger>
-          <TabsTrigger value="structures">同步市场订单</TabsTrigger>
-          <TabsTrigger value="orders">我的订单</TabsTrigger>
-          <TabsTrigger value="analysis">订单分析</TabsTrigger>
-          <TabsTrigger value="sales">销量分析</TabsTrigger>
-        </TabsList>
+        <div className="flex flex-wrap items-center gap-2">
+          <TabsList className="gap-1.5">
+            <TabsTrigger value="groups">交易市场</TabsTrigger>
+            <TabsTrigger value="compare">市场差价对比</TabsTrigger>
+            <TabsTrigger value="orders">我的订单</TabsTrigger>
+            <TabsTrigger value="analysis">订单分析</TabsTrigger>
+            <TabsTrigger value="sales">销量分析</TabsTrigger>
+          </TabsList>
+
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-8 text-xs"
+            onClick={() => setStructuresOpen(true)}
+          >
+            <Building2 className="size-3.5" />
+            同步市场订单
+          </Button>
+        </div>
 
         <TabsContent value="groups" className="market-page__content">
           <MarketGroupsTab characterId={activeCharacterId} />
@@ -101,10 +124,6 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
 
         <TabsContent value="compare" className="market-page__content">
           <MarketCompareTab />
-        </TabsContent>
-
-        <TabsContent value="structures" className="market-page__content">
-          <MarketStructuresTab characterId={activeCharacterId} />
         </TabsContent>
 
         <TabsContent
@@ -130,6 +149,23 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
           <MarketSalesTab />
         </TabsContent>
       </Tabs>
+
+      {/* 同步市场订单：从标签页改为弹窗，避免占掉一个主标签 */}
+      <Dialog open={structuresOpen} onOpenChange={setStructuresOpen}>
+        <DialogContent className="flex h-[80vh] flex-col gap-3 sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>同步市场订单</DialogTitle>
+            <DialogDescription>
+              录入建筑并同步订单数据。只列出开放市场的建筑，同步结果会存到本地库，
+              供「我的订单」「市场差价对比」「销量分析」等标签使用。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <MarketStructuresTab characterId={activeCharacterId} />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

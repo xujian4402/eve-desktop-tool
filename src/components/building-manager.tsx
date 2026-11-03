@@ -27,7 +27,7 @@ interface BuildingManagerProps {
 }
 
 /**
- * 同步市场建筑：五源汇总（挂单 / 资产 / 合同 / 所在 / 军团）
+ * 获取玩家市场建筑：五源汇总（挂单 / 资产 / 合同 / 所在 / 军团）
  * 发现角色可访问的玩家建筑，只保留开放市场的那些。
  *
  * 单栋录入已拆到 building-ingest.tsx（放在标题行右侧）。
@@ -87,7 +87,7 @@ export default function BuildingManager({
       )}
 
       <section>
-        <h3 className="mb-1 text-sm font-medium">同步市场建筑</h3>
+        <h3 className="mb-1 text-sm font-medium">获取玩家市场建筑</h3>
         <p className="mb-2 text-sm text-muted-foreground">
           汇总「挂单 · 资产 · 合同 · 当前位置 · 军团建筑」五个来源，
           找出当前角色能访问的玩家建筑并逐个解析，只保留开放市场的建筑。
@@ -97,10 +97,10 @@ export default function BuildingManager({
           {syncing ? (
             <>
               <Spinner className="size-4" />
-              同步中…
+              获取中…
             </>
           ) : (
-            "开始同步"
+            "开始获取"
           )}
         </Button>
       </section>
