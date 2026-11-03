@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import StructureComparePanel from "@/components/structure-compare-panel";
 import { cn } from "@/lib/utils";
 
 import {
@@ -809,30 +811,74 @@ export default function MarketGroupBrowser({
           </>
         )}
 
-        <div
-          // 切换物品时重建容器，避免停留在上一次的滚动位置
-          key={`${marketKey}-${selectedTypeId ?? "none"}`}
-          className="flex h-[360px] min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-cyan-500/20 bg-[#0a1118]/85 p-4 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)] md:h-full"
-        >
-          {selectedTypeId === null ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-              <p className="text-sm text-muted-foreground">
-                {selection?.kind === "group"
-                  ? "这是分类，不是具体物品"
-                  : "在左侧选择具体物品，查看出售与收购订单"}
-              </p>
-              <p className="text-xs text-muted-foreground/70">
-                左侧列表中缩进的条目就是物品，点击即可查看订单
-              </p>
+        <div className="flex h-[360px] min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-cyan-500/20 bg-[#0a1118]/85 shadow-[inset_0_1px_0_0_rgba(34,211,238,0.06)] md:h-full">
+          <Tabs
+            defaultValue="prices"
+            className="flex min-h-0 flex-1 flex-col gap-0"
+          >
+            <div className="flex shrink-0 items-center gap-2 border-b border-cyan-500/10 px-3 py-1.5">
+              <TabsList className="h-7 gap-0.5 p-0.5">
+                <TabsTrigger value="prices" className="h-6 px-2 text-[11px]">
+                  订单价格
+                </TabsTrigger>
+                <TabsTrigger value="compare" className="h-6 px-2 text-[11px]">
+                  市场对比
+                </TabsTrigger>
+              </TabsList>
+
+              {selectedTypeId !== null && (
+                <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                  {typeNames[selectedTypeId] ?? `#${selectedTypeId}`}
+                </span>
+              )}
             </div>
-          ) : (
-            <TypeOrders
-              marketKey={marketKey}
-              typeId={selectedTypeId}
-              typeName={typeNames[selectedTypeId] ?? `#${selectedTypeId}`}
-              myOrderIds={myOrderIds}
-            />
-          )}
+
+            <TabsContent
+              value="prices"
+              className="min-h-0 flex-1 overflow-hidden p-4"
+            >
+              {/* 只重建价格区，避免切换物品时把「市场对比」里的建筑选择也清掉 */}
+              <div
+                key={`${marketKey}-${selectedTypeId ?? "none"}`}
+                className="flex h-full flex-col"
+              >
+                {selectedTypeId === null ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      {selection?.kind === "group"
+                        ? "这是分类，不是具体物品"
+                        : "在左侧选择具体物品，查看出售与收购订单"}
+                    </p>
+                    <p className="text-xs text-muted-foreground/70">
+                      左侧列表中缩进的条目就是物品，点击即可查看订单
+                    </p>
+                  </div>
+                ) : (
+                  <TypeOrders
+                    marketKey={marketKey}
+                    typeId={selectedTypeId}
+                    typeName={typeNames[selectedTypeId] ?? `#${selectedTypeId}`}
+                    myOrderIds={myOrderIds}
+                  />
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent
+              value="compare"
+              className="min-h-0 flex-1 overflow-auto p-3"
+            >
+              <StructureComparePanel
+                compact
+                presetTypeId={selectedTypeId}
+                presetTypeName={
+                  selectedTypeId !== null
+                    ? (typeNames[selectedTypeId] ?? null)
+                    : null
+                }
+              />
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

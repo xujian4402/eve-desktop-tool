@@ -88,7 +88,7 @@ export default function MarketPage({ onNavigate }: MarketPageProps) {
       >
         <TabsList className="gap-1.5">
           <TabsTrigger value="groups">交易市场</TabsTrigger>
-          <TabsTrigger value="compare">市场对比</TabsTrigger>
+          <TabsTrigger value="compare">市场差价对比</TabsTrigger>
           <TabsTrigger value="structures">同步市场订单</TabsTrigger>
           <TabsTrigger value="orders">我的订单</TabsTrigger>
           <TabsTrigger value="analysis">订单分析</TabsTrigger>

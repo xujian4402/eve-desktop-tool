@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Search } from "lucide-react";
 
@@ -24,6 +25,18 @@ import {
 
 /** 最多同时对比几栋建筑 */
 const MAX_COMPARE = 5;
+
+/** 用 0 代表 Jita 市场（本地没有这个建筑，数据走 ESI 实时接口） */
+const JITA_ID = 0;
+const JITA_REGION_ID = 10000002;
+
+/** Rust 侧 RegionOrder 的前端视图（只保留计算需要的字段） */
+interface RegionOrder {
+  orderId: number;
+  isBuyOrder: boolean;
+  price: number;
+  volumeRemain: number;
+}
 
 /** 价差榜条数选项 */
 const SPREAD_LIMITS = [20, 50, 100, 200] as const;
@@ -138,11 +151,28 @@ function spreadPercent(row: StructurePriceRow): number | null {
  *
  * 数据全部来自本地订单快照，不请求 ESI。
  */
-export default function StructureComparePanel() {
+export default function StructureComparePanel({
+  compact = false,
+  presetTypeId = null,
+  presetTypeName = null,
+}: {
+  /** 紧凑模式：只保留「选择建筑 + 对比物品 + 单物品对比」，隐藏卖家价差榜 */
+  compact?: boolean;
+  /** 外部（交易市场分类树）选中的物品，变化时自动填入对比 */
+  presetTypeId?: number | null;
+  presetTypeName?: string | null;
+} = {}) {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [keyword, setKeyword] = useState("");
-  const [typeId, setTypeId] = useState<number | null>(null);
-  const [typeName, setTypeName] = useState<string>("");
+  const [typeId, setTypeId] = useState<number | null>(presetTypeId);
+  const [typeName, setTypeName] = useState<string>(presetTypeName ?? "");
+
+  // 左侧分类树切换物品时，右侧对比物品自动跟随
+  useEffect(() => {
+    if (presetTypeId === null) return;
+    setTypeId(presetTypeId);
+    setTypeName(presetTypeName ?? `#${presetTypeId}`);
+  }, [presetTypeId, presetTypeName]);
 
   /** 价差榜参数 */
   const [spreadA, setSpreadA] = useState<number | null>(null);
@@ -175,12 +205,64 @@ export default function StructureComparePanel() {
     staleTime: 60_000,
   });
 
+  /** 只把本地建筑交给本地查询，Jita 单独走 ESI */
+  const localIds = useMemo(
+    () => selectedIds.filter((id) => id !== JITA_ID),
+    [selectedIds],
+  );
+
   const compareQuery = useQuery({
-    queryKey: ["structure-compare", typeId, selectedIds],
-    queryFn: () => compareStructurePrices(typeId as number, selectedIds),
-    enabled: typeId !== null && selectedIds.length >= 2,
+    queryKey: ["structure-compare", typeId, localIds],
+    queryFn: () => compareStructurePrices(typeId as number, localIds),
+    enabled: typeId !== null && localIds.length >= 1,
     staleTime: 30_000,
   });
+
+  /** Jita 实时盘口：最高买价 / 最低卖价 / 买卖单量 */
+  const jitaQuery = useQuery({
+    queryKey: ["jita-compare", typeId],
+    queryFn: () =>
+      invoke<RegionOrder[]>("fetch_region_type_orders", {
+        regionId: JITA_REGION_ID,
+        typeId: typeId as number,
+      }),
+    enabled: typeId !== null && selectedIds.includes(JITA_ID),
+    staleTime: 60_000,
+  });
+
+  const jitaRow = useMemo<StructurePriceRow | null>(() => {
+    if (!selectedIds.includes(JITA_ID) || typeId === null) return null;
+
+    const orders = jitaQuery.data ?? [];
+    let bestBuy: number | null = null;
+    let bestSell: number | null = null;
+    let buyVolume = 0;
+    let sellVolume = 0;
+
+    for (const order of orders) {
+      if (order.isBuyOrder) {
+        bestBuy =
+          bestBuy === null ? order.price : Math.max(bestBuy, order.price);
+        buyVolume += order.volumeRemain;
+      } else {
+        bestSell =
+          bestSell === null ? order.price : Math.min(bestSell, order.price);
+        sellVolume += order.volumeRemain;
+      }
+    }
+
+    return {
+      structure_id: JITA_ID,
+      name: "Jita 市场",
+      solar_system_name: "The Forge",
+      best_buy: bestBuy,
+      best_sell: bestSell,
+      sell_volume: sellVolume,
+      buy_volume: buyVolume,
+      order_count: orders.length,
+      last_synced_at: null,
+    };
+  }, [selectedIds, typeId, jitaQuery.data]);
 
   const levelsQuery = useQuery({
     queryKey: ["order-book-levels", spreadPair?.a, spreadPair?.b],
@@ -191,13 +273,15 @@ export default function StructureComparePanel() {
   });
 
   const rows = useMemo(() => {
-    const list = compareQuery.data ?? [];
-    return [...list].sort((a, b) => {
+    const list = [...(compareQuery.data ?? [])];
+    if (jitaRow) list.push(jitaRow);
+
+    return list.sort((a, b) => {
       const sa = spreadPercent(a) ?? -Infinity;
       const sb = spreadPercent(b) ?? -Infinity;
       return sb - sa;
     });
-  }, [compareQuery.data]);
+  }, [compareQuery.data, jitaRow]);
 
   /** 逐档撮合出的价差榜 */
   const spreadRows = useMemo(() => {
@@ -372,21 +456,11 @@ export default function StructureComparePanel() {
     );
   }
 
-  if (structures.length === 0) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>还没有可对比的建筑</EmptyTitle>
-          <EmptyDescription>
-            到「同步市场订单」标签页录入或同步建筑，并同步一次订单后再来对比。
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto [&>*]:shrink-0">
+      {/* 选建筑 + 选物品 + 单物品对比：只在紧凑模式（交易市场右侧）出现 */}
+      {compact && (
+        <>
       {/* 建筑选择 */}
       <section>
         <div className="mb-2 flex items-center gap-2">
@@ -400,6 +474,31 @@ export default function StructureComparePanel() {
         </div>
 
         <div className="flex flex-wrap gap-1.5">
+          {/* Jita 走 ESI 实时行情，用于和自有建筑比价 */}
+          {(() => {
+            const active = selectedIds.includes(JITA_ID);
+            const full = !active && selectedIds.length >= MAX_COMPARE;
+
+            return (
+              <button
+                type="button"
+                disabled={full}
+                title="Jita 市场（实时 ESI 行情）"
+                onClick={() => toggleStructure(JITA_ID)}
+                className={cn(
+                  "flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
+                  active
+                    ? "border-amber-400/60 bg-amber-400/10 text-amber-100"
+                    : "border-border text-muted-foreground hover:border-amber-500/30 hover:text-foreground",
+                  full && "cursor-not-allowed opacity-40",
+                )}
+              >
+                {active && <Check className="size-3" />}
+                Jita 市场
+              </button>
+            );
+          })()}
+
           {structures.map((item) => {
             const active = selectedIds.includes(item.structure_id);
             const full = !active && selectedIds.length >= MAX_COMPARE;
@@ -424,6 +523,12 @@ export default function StructureComparePanel() {
             );
           })}
         </div>
+
+        {structures.length === 0 && (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            还没有同步过订单的建筑；也可以勾选上方「Jita 市场」查看实时行情。
+          </p>
+        )}
       </section>
 
       {/* 物品搜索 */}
@@ -532,7 +637,14 @@ export default function StructureComparePanel() {
                   key={row.structure_id}
                   className="grid grid-cols-[1.4fr_1fr_1fr_0.9fr_1fr_0.9fr] items-center gap-2 border-b border-cyan-500/10 px-3 py-1.5 text-[11px] last:border-b-0"
                 >
-                  <span className="min-w-0 truncate text-foreground/85">
+                  <span
+                    className={cn(
+                      "min-w-0 truncate",
+                      row.structure_id === JITA_ID
+                        ? "text-amber-200"
+                        : "text-foreground/85",
+                    )}
+                  >
                     {row.name ?? `#${row.structure_id}`}
                     {row.solar_system_name && (
                       <span className="ml-1 text-[10px] text-muted-foreground/60">
@@ -564,9 +676,13 @@ export default function StructureComparePanel() {
                   </span>
 
                   <span className="text-[10px] text-muted-foreground/70">
-                    {row.last_synced_at
-                      ? new Date(row.last_synced_at).toLocaleDateString("zh-CN")
-                      : "未同步"}
+                    {row.structure_id === JITA_ID
+                      ? "实时"
+                      : row.last_synced_at
+                        ? new Date(row.last_synced_at).toLocaleDateString(
+                            "zh-CN",
+                          )
+                        : "未同步"}
                   </span>
                 </div>
               );
@@ -574,9 +690,12 @@ export default function StructureComparePanel() {
           </div>
         )}
       </section>
+        </>
+      )}
 
-      {/* 卖家价差榜 */}
-      <section className="border-t border-cyan-500/10 pt-4">
+      {/* 卖家价差榜（紧凑模式下不展示） */}
+      {!compact && (
+      <section className="pt-1">
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <h3 className="text-xs font-medium text-foreground/85">卖家价差榜</h3>
           {spreadPair !== null && !levelsQuery.isPending && (
@@ -841,6 +960,7 @@ export default function StructureComparePanel() {
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }
