@@ -82,6 +82,27 @@ export function planetTypeName(typeId: number): string {
   return PLANET_TYPE_ID_TO_NAME[typeId] ?? `#${typeId}`;
 }
 
+/**
+ * ESI 返回的行星类型代码 → 中文名。
+ * `/characters/{id}/planets/` 给的是 planet_type 字符串（如 temperate），不是 type_id。
+ */
+export const PLANET_TYPE_CODE_TO_NAME: Record<string, PiPlanetType> = {
+  temperate: "温和行星",
+  barren: "贫瘠行星",
+  oceanic: "海洋行星",
+  ice: "冰体行星",
+  gas: "气体行星",
+  lava: "熔岩行星",
+  storm: "风暴行星",
+  plasma: "等离子行星",
+};
+
+/** 行星类型代码 → 中文名（缺失时回退「未知行星」） */
+export function planetTypeCodeName(code: string | null | undefined): string {
+  if (!code) return "未知行星";
+  return PLANET_TYPE_CODE_TO_NAME[code] ?? code;
+}
+
 /** 设施档位（从低到高） */
 export const PI_FACILITY_TIERS: PiFacilityTier[] = [
   "基础工业设施",

@@ -700,7 +700,7 @@ export default function StructureComparePanel({
           <h3 className="text-xs font-medium text-foreground/85">卖家价差榜</h3>
           {spreadPair !== null && !levelsQuery.isPending && (
             <Badge variant="secondary" className="tabular-nums text-[10px]">
-              {spreadRows.length} 个机会
+              显示 {displayedSpreadRows.length} / 共 {spreadRows.length} 个机会
             </Badge>
           )}
 

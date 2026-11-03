@@ -26,7 +26,8 @@ import {
   piTypeName,
   type PiSystemPlanets,
 } from "@/lib/pi/data";
-import { planetTypeName } from "@/lib/pi/planet-types";
+import { facilityTypeOf, factoryTierOf } from "@/lib/pi/facility-kinds";
+import { planetTypeCodeName } from "@/lib/pi/planet-types";
 import { cn } from "@/lib/utils";
 
 /** 设施展示顺序 */
@@ -280,7 +281,7 @@ function ColonyCard({
           {system?.name ?? `#${colony.solarSystemId}`}
         </span>
         <Badge variant="secondary" className="px-1 py-0 text-[9px]">
-          {planetTypeName(colony.planetTypeId)}
+          {planetTypeCodeName(colony.planetType)}
         </Badge>
         {system && (
           <span className={cn("font-mono text-[10px]", securityClass(system.security))}>
@@ -334,7 +335,9 @@ function PinRow({ pin }: { pin: PiColonyPin }) {
           采
         </span>
         <span className="text-foreground/85">
-          {piTypeName(pin.productTypeId ?? 0)}
+          {pin.productTypeId !== null
+            ? piTypeName(pin.productTypeId)
+            : "未设置采集程序"}
         </span>
         {pin.qtyPerCycle !== null && (
           <span className="font-mono text-muted-foreground">
@@ -367,6 +370,11 @@ function PinRow({ pin }: { pin: PiColonyPin }) {
       ? PI_SCHEMATICS.find((item) => item.id === pin.schematicId)
       : undefined;
 
+    // ESI 的 factory_details 不带产物 ID，需要用配方表反查产出物
+    const productTypeId = schematic?.outputTypeId ?? pin.productTypeId;
+    // 按 type_id 区分基础 / 高级 / 高科技工厂
+    const tier = factoryTierOf(pin.typeId);
+
     return (
       <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] leading-tight">
         <span className="shrink-0 rounded bg-muted/60 px-1 text-[9px] text-muted-foreground">
@@ -375,20 +383,31 @@ function PinRow({ pin }: { pin: PiColonyPin }) {
         <span className="text-foreground/85">
           {schematic?.name ?? `配方#${pin.schematicId ?? 0}`}
         </span>
-        {pin.productTypeId !== null && (
+        {tier && (
+          <span className="shrink-0 rounded bg-muted/40 px-1 text-[9px] text-muted-foreground/80">
+            {tier}
+          </span>
+        )}
+        {productTypeId !== null && productTypeId !== undefined && (
           <span className="text-muted-foreground/70">
-            → {piTypeName(pin.productTypeId)}
+            → {piTypeName(productTypeId)}
           </span>
         )}
       </div>
     );
   }
 
+  // 指挥中心 / 发射平台 / 储藏设施：按 type_id 识别具体建筑
+  const facility = facilityTypeOf(pin.typeId);
+
   return (
     <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] leading-tight">
       <span className="shrink-0 rounded bg-muted/60 px-1 text-[9px] text-muted-foreground">
-        {pin.kind === "storage" ? "储" : "设"}
+        {facility?.short ?? "设"}
       </span>
+      {facility && (
+        <span className="text-foreground/85">{facility.label}</span>
+      )}
       {pin.contents.length > 0 ? (
         <span className="text-muted-foreground">
           {pin.contents

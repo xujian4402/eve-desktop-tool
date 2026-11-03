@@ -8,8 +8,10 @@ import { invoke } from "@tauri-apps/api/core";
 export interface PiColony {
   planetId: number;
   solarSystemId: number;
-  /** 行星类型 ID，如 2016 = 贫瘠行星 */
-  planetTypeId: number;
+  /**
+   * 行星类型代码（ESI 原文）：temperate / barren / oceanic / ice / gas / lava / storm / plasma
+   */
+  planetType: string | null;
   /** 殖民地等级 0~5 */
   upgradeLevel: number;
   /** 已放置的设施数量 */

@@ -316,6 +316,36 @@ export default function MarketGroupBrowser({
   };
 
   /**
+   * 筛选时命中的分组（含其所有祖先）。
+   *
+   * 筛选不强制展开整棵树，只把「有命中物品的分支」展开，
+   * 其余分组保持用户当前的折叠状态。
+   */
+  const matchedGroups = useMemo(() => {
+    if (allowedTypes === null) return null;
+
+    const result = new Set<number>();
+
+    const visit = (list: GroupNode[]): boolean => {
+      let any = false;
+      for (const node of list) {
+        const selfMatched = node.types.some((typeId) =>
+          allowedTypes.has(typeId),
+        );
+        const childMatched = visit(childrenMap.get(node.id) ?? []);
+        if (selfMatched || childMatched) {
+          result.add(node.id);
+          any = true;
+        }
+      }
+      return any;
+    };
+
+    visit(roots);
+    return result;
+  }, [roots, childrenMap, allowedTypes]);
+
+  /**
    * 生成扁平行。
    * @param expandAll true 时忽略展开状态（搜索时用，避免命中项被折叠挡住）
    */
@@ -337,7 +367,10 @@ export default function MarketGroupBrowser({
             : node.types.filter((typeId) => allowed.has(typeId));
 
         const hasChildren = children.length > 0 || matchedTypes.length > 0;
-        const isOpen = expandAll || expanded.has(node.id);
+        const isOpen =
+          expandAll ||
+          expanded.has(node.id) ||
+          (matchedGroups?.has(node.id) ?? false);
 
         const startIndex = rows.length;
         rows.push({
@@ -389,11 +422,10 @@ export default function MarketGroupBrowser({
     return rows;
   };
 
-  /** 按当前展开状态可见的行 */
+  /** 按当前展开状态可见的行（筛选时只自动展开命中分支） */
   const visibleRows = useMemo(
-    // 筛选状态下强制展开，否则命中的物品藏在折叠的分类里
-    () => buildRows(allowedTypes !== null, allowedTypes),
-    [roots, childrenMap, typeNames, expanded, allowedTypes],
+    () => buildRows(false, allowedTypes),
+    [roots, childrenMap, typeNames, expanded, allowedTypes, matchedGroups],
   );
 
   /** 全量行（所有分类都展开），仅搜索时使用 */
@@ -718,13 +750,8 @@ export default function MarketGroupBrowser({
                 <button
                   type="button"
                   onClick={() => setExpanded(new Set())}
-                  // 筛选状态下强制展开，收起按钮无意义
-                  disabled={expanded.size === 0 || filterMode !== "all"}
-                  title={
-                    filterMode !== "all"
-                      ? "筛选状态下会强制展开全部分类"
-                      : "收起所有已展开的分类"
-                  }
+                  disabled={expanded.size === 0}
+                  title="收起所有已展开的分类"
                   className="rounded px-1.5 py-0.5 text-[10px] text-cyan-300/70 transition-colors hover:bg-cyan-400/10 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   全部收起

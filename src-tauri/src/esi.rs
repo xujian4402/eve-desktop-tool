@@ -791,8 +791,9 @@ struct EsiColony {
     planet_id: Option<i64>,
     #[serde(default)]
     solar_system_id: Option<i64>,
+    /// ESI 这里给的是行星类型字符串（temperate / barren / ...），不是 type_id
     #[serde(default)]
-    type_id: Option<i64>,
+    planet_type: Option<String>,
     #[serde(default)]
     upgrade_level: Option<i64>,
     #[serde(default)]
@@ -807,8 +808,8 @@ struct EsiColony {
 pub struct ColonyView {
     pub planet_id: i64,
     pub solar_system_id: i64,
-    /// 行星类型 ID（11 温和 / 12 冰体 / 13 气体 / 2014 海洋 / 2015 熔岩 / 2016 贫瘠 / 2017 风暴 / 2063 等离子）
-    pub planet_type_id: i64,
+    /// 行星类型字符串（temperate / barren / oceanic / ice / gas / lava / storm / plasma）
+    pub planet_type: Option<String>,
     pub upgrade_level: i64,
     pub num_pins: i64,
     pub last_update: String,
@@ -868,7 +869,7 @@ pub async fn fetch_character_colonies(
         .map(|row| ColonyView {
             planet_id: row.planet_id.unwrap_or(0),
             solar_system_id: row.solar_system_id.unwrap_or(0),
-            planet_type_id: row.type_id.unwrap_or(0),
+            planet_type: row.planet_type,
             upgrade_level: row.upgrade_level.unwrap_or(0),
             num_pins: row.num_pins.unwrap_or(0),
             last_update: row.last_update.unwrap_or_default(),
@@ -883,6 +884,9 @@ struct EsiPin {
     pin_id: Option<i64>,
     #[serde(default)]
     type_id: Option<i64>,
+    /// 部分设施（工厂）在 pin 顶层也带配方 ID
+    #[serde(default)]
+    schematic_id: Option<i64>,
     #[serde(default)]
     last_cycle_start: Option<String>,
     #[serde(default)]
@@ -917,8 +921,6 @@ struct EsiExtractor {
 struct EsiFactory {
     #[serde(default)]
     schematic_id: Option<i64>,
-    #[serde(default)]
-    product_type_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1021,13 +1023,17 @@ pub async fn fetch_colony_detail(
                     .collect(),
                 kind: kind.to_string(),
                 cycle_time: pin.extractor_details.as_ref().and_then(|d| d.cycle_time),
+                // 只有采集器带 product_type_id；工厂的产物需要前端用配方 ID 反查
                 product_type_id: pin
                     .extractor_details
                     .as_ref()
-                    .and_then(|d| d.product_type_id)
-                    .or_else(|| pin.factory_details.as_ref().and_then(|d| d.product_type_id)),
+                    .and_then(|d| d.product_type_id),
                 qty_per_cycle: pin.extractor_details.as_ref().and_then(|d| d.qty_per_cycle),
-                schematic_id: pin.factory_details.as_ref().and_then(|d| d.schematic_id),
+                schematic_id: pin
+                    .factory_details
+                    .as_ref()
+                    .and_then(|d| d.schematic_id)
+                    .or(pin.schematic_id),
                 expiry_time: pin.expiry_time,
                 last_cycle_start: pin.last_cycle_start,
             }
