@@ -1,0 +1,96 @@
+/* 预警监控：顶部状态条 + 两列配置区 + 命中列表 */
+.alert-monitor-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 顶部状态条 */
+.alert-monitor-tab__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border, rgb(255 255 255 / 0.1));
+}
+
+.alert-monitor-tab__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+.alert-monitor-tab__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgb(148 163 184 / 0.4);
+}
+
+.alert-monitor-tab__dot--on {
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgb(52 211 153 / 0.15);
+}
+
+.alert-monitor-tab__count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+/* 配置区：两列网格，高度贴合内容 */
+.alert-monitor-tab__form {
+  display: grid;
+  flex-shrink: 0;
+  gap: 10px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--border, rgb(255 255 255 / 0.1));
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+@media (max-width: 900px) {
+  .alert-monitor-tab__form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.alert-monitor-tab__field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 占满整行（提醒音、说明文字） */
+.alert-monitor-tab__field--full {
+  grid-column: 1 / -1;
+}
+
+.alert-monitor-tab__label {
+  font-size: 10px;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+
+
+.alert-monitor-tab__hint {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+/* 命中列表：占满剩余高度 */
+.alert-monitor-tab__list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}

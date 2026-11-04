@@ -2,6 +2,7 @@
 export type MenuKey =
   | "planetary"
   | "manufacturing"
+  | "monitor"
   | "map"
   | "killmail"
   | "market"

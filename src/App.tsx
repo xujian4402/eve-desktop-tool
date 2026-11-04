@@ -6,6 +6,7 @@ import {
   Factory,
   Map as MapIcon,
   Orbit,
+  Radar,
   ShoppingCart,
   UserRound,
   type LucideIcon,
@@ -14,8 +15,10 @@ import {
 import AccountPage from "./pages/AccountPage";
 import ManufacturingPage from "./pages/ManufacturingPage";
 import MarketPage from "./pages/MarketPage";
+import MonitorPage from "./pages/MonitorPage";
 import PlanetaryPage from "./pages/PlanetaryPage";
 import { Toaster } from "@/components/ui/sonner";
+import { useMonitorStore } from "@/stores/monitor-store";
 import { useOrderSyncStore } from "@/stores/order-sync-store";
 import type { MenuKey } from "./lib/nav";
 import "./App.css";
@@ -42,6 +45,11 @@ const MENUS: MenuItem[] = [
     label: "制造业",
     description: "蓝图资产、成本计算、生产队列与建筑配置。",
   },
+  {
+    key: "monitor",
+    label: "监控系统",
+    description: "战斗监控与预警监控，基于本地日志实时提醒。",
+  },
   // {
   //   key: "map",
   //   label: "地图",
@@ -63,6 +71,7 @@ const MENUS: MenuItem[] = [
 const MENU_ICONS: Partial<Record<MenuKey, LucideIcon>> = {
   planetary: Orbit,
   manufacturing: Factory,
+  monitor: Radar,
   map: MapIcon,
   killmail: Crosshair,
   market: ShoppingCart,
@@ -80,6 +89,12 @@ function App() {
     initOrderSync();
   }, [initOrderSync]);
 
+  // 监控事件监听同样挂在应用级：切到其他菜单也能收到提醒并播放提示音
+  const initMonitor = useMonitorStore((state) => state.init);
+  useEffect(() => {
+    initMonitor();
+  }, [initMonitor]);
+
   const current = MENUS.find((menu) => menu.key === activeMenu) ?? MENUS[0];
 
   const renderContent = () => {
@@ -88,6 +103,8 @@ function App() {
         return <PlanetaryPage />;
       case "manufacturing":
         return <ManufacturingPage onNavigate={setActiveMenu} />;
+      case "monitor":
+        return <MonitorPage />;
       case "market":
         return <MarketPage onNavigate={setActiveMenu} />;
       case "account":
@@ -150,7 +167,9 @@ function App() {
         className={
           activeMenu === "account" ||
           activeMenu === "market" ||
-          activeMenu === "planetary"
+          activeMenu === "planetary" ||
+          activeMenu === "manufacturing" ||
+          activeMenu === "monitor"
             ? "content content--fill"
             : "content"
         }

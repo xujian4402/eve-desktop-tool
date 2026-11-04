@@ -4,6 +4,7 @@ mod db;
 mod esi;
 mod esi_industry;
 mod eve_auth;
+mod monitor;
 mod tray;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,7 +135,12 @@ pub fn run() {
             esi_industry::fetch_corporation_industry_jobs,
             esi_industry::fetch_industry_systems,
             esi_industry::fetch_market_prices,
-            esi_industry::fetch_character_skills
+            esi_industry::fetch_character_skills,
+            monitor::resolve_eve_log_dir,
+            monitor::scan_chat_once,
+            monitor::start_monitor,
+            monitor::stop_monitor,
+            monitor::read_audio_file
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

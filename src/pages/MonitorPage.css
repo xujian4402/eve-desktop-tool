@@ -1,0 +1,64 @@
+/* 监控系统外壳：只做高度传递 */
+.monitor-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.monitor-page__tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0;
+}
+
+.monitor-page__tabslist {
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.monitor-page__content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: flex-start;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+/* 非激活标签必须完全隐藏：否则旧面板会在上方留出一大块空白 */
+.monitor-page__content[data-state="inactive"] {
+  display: none;
+}
+
+/* 顶部工具条：日志目录 + 启停 */
+.monitor-page__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 日志目录输入框固定宽度，不随窗口拉伸 */
+.monitor-page__dir {
+  position: relative;
+  flex: 0 0 360px;
+  width: 360px;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .monitor-page__dir {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
+
