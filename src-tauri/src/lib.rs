@@ -2,6 +2,7 @@
 mod crypto;
 mod db;
 mod esi;
+mod esi_industry;
 mod eve_auth;
 mod tray;
 
@@ -63,6 +64,12 @@ pub fn run() {
             sql: include_str!("../migrations/0007_pi_stock.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "manufacturing",
+            sql: include_str!("../migrations/0008_manufacturing.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -118,9 +125,16 @@ pub fn run() {
             esi::fetch_character_colonies,
             esi::fetch_colony_detail,
             esi::fetch_region_type_orders,
+            esi::fetch_manufacturing_structures,
             esi::sync_market_groups,
             esi::seed_market_groups,
-            esi::get_type_group_names
+            esi::get_type_group_names,
+            esi_industry::fetch_character_blueprints,
+            esi_industry::fetch_character_industry_jobs,
+            esi_industry::fetch_corporation_industry_jobs,
+            esi_industry::fetch_industry_systems,
+            esi_industry::fetch_market_prices,
+            esi_industry::fetch_character_skills
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

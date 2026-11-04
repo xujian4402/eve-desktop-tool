@@ -22,7 +22,7 @@ const MAX_ASSET_PAGES: usize = 50;
 /// 单次扫描最多解析的建筑数量，避免极端情况长时间占用
 const MAX_SCAN_STRUCTURES: usize = 60;
 
-fn http() -> &'static reqwest::Client {
+pub(crate) fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -35,7 +35,10 @@ fn http() -> &'static reqwest::Client {
 
 /// 取该角色可用的 access_token。
 /// 数据库里的令牌就是缓存：未过期直接用，过期则用加密保存的 refresh_token 换新并写回。
-async fn ensure_token(pool: &SqlitePool, character_id: i64) -> Result<String, String> {
+pub(crate) async fn ensure_token(
+    pool: &SqlitePool,
+    character_id: i64,
+) -> Result<String, String> {
     if let Some(token) = cached_access_token(pool, character_id).await? {
         return Ok(token);
     }
@@ -218,7 +221,7 @@ fn parse_cache_max_age(headers: &reqwest::header::HeaderMap) -> Option<i64> {
 /// 按 X-Pages 分页拉全量订单。
 ///
 /// 返回值第三项是 ESI 缓存到期时间（unix 毫秒），拿不到缓存头时为 None。
-async fn fetch_paged_orders<T>(
+pub(crate) async fn fetch_paged_orders<T>(
     url: String,
     token: &str,
     label: &str,
@@ -497,6 +500,70 @@ async fn has_market_service(structure_id: i64, token: &str) -> bool {
         Ok(response) => response.status().is_success(),
         Err(_) => false,
     }
+}
+
+/// 制造类建筑（工程复合体）的 typeID：莱塔卢 / 阿兹贝尔 / 索迪约
+const MANUFACTURING_STRUCTURE_TYPES: [i64; 3] = [35825, 35826, 35827];
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManufacturingStructureView {
+    pub structure_id: i64,
+    pub name: String,
+    pub solar_system_id: Option<i64>,
+    pub solar_system_name: Option<String>,
+    pub type_id: i64,
+    pub owner_id: Option<i64>,
+}
+
+/// 获取角色可访问的「制造建筑」。
+///
+/// 复用五源发现（挂单 / 资产 / 合同 / 所在 / 军团），逐个解析类型，
+/// 只保留工程复合体（莱塔卢 / 阿兹贝尔 / 索迪约），供制造业建筑配置使用。
+#[tauri::command]
+pub async fn fetch_manufacturing_structures(
+    character_id: i64,
+    pool: tauri::State<'_, SqlitePool>,
+) -> Result<Vec<ManufacturingStructureView>, String> {
+    let token = ensure_token(pool.inner(), character_id).await?;
+    let corporation_id = character_corporation_id(pool.inner(), character_id).await;
+
+    let (found, _notes) = discover_structure_ids(character_id, corporation_id, &token).await;
+
+    let mut candidates: Vec<(i64, Vec<String>)> = found.into_iter().collect();
+    // 来源越多越可能是常用建筑，优先解析
+    candidates.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    candidates.truncate(MAX_SCAN_STRUCTURES);
+
+    let mut result: Vec<ManufacturingStructureView> = Vec::new();
+
+    for (structure_id, _sources) in candidates {
+        let Ok(detail) = fetch_structure_detail(structure_id, &token).await else {
+            // 无权访问的建筑直接跳过：拿不到类型就无从判断是否可制造
+            continue;
+        };
+
+        let type_id = detail.type_id.unwrap_or(0);
+        if !MANUFACTURING_STRUCTURE_TYPES.contains(&type_id) {
+            continue;
+        }
+
+        let solar_system_name = match detail.solar_system_id {
+            Some(id) => resolve_name(id).await,
+            None => None,
+        };
+
+        result.push(ManufacturingStructureView {
+            structure_id,
+            name: detail.name,
+            solar_system_id: detail.solar_system_id,
+            solar_system_name,
+            type_id,
+            owner_id: detail.owner_id,
+        });
+    }
+
+    Ok(result)
 }
 
 #[derive(Debug, Serialize)]

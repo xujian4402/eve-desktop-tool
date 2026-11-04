@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import AccountPage from "./pages/AccountPage";
+import ManufacturingPage from "./pages/ManufacturingPage";
 import MarketPage from "./pages/MarketPage";
 import PlanetaryPage from "./pages/PlanetaryPage";
 import { Toaster } from "@/components/ui/sonner";
@@ -36,12 +37,11 @@ const MENUS: MenuItem[] = [
     label: "行星工业",
     description: "P0-P4 配方与收益、行星资源选址、主权升级预算。",
   },
-  // 暂未开放，先隐藏入口；代码保留，恢复时取消注释即可
-  // {
-  //   key: "manufacturing",
-  //   label: "制造业",
-  //   description: "制造业模块占位，后续在此展示蓝图、材料清单与生产排期。",
-  // },
+  {
+    key: "manufacturing",
+    label: "制造业",
+    description: "蓝图资产、成本计算、生产队列与建筑配置。",
+  },
   // {
   //   key: "map",
   //   label: "地图",
@@ -86,6 +86,8 @@ function App() {
     switch (activeMenu) {
       case "planetary":
         return <PlanetaryPage />;
+      case "manufacturing":
+        return <ManufacturingPage onNavigate={setActiveMenu} />;
       case "market":
         return <MarketPage onNavigate={setActiveMenu} />;
       case "account":

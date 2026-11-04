@@ -1,0 +1,62 @@
+/* 建筑配置：一行一栋，输入框与保存按钮对齐 */
+.mfg-facility-tab {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.mfg-facility-tab__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mfg-facility-tab__hint {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+.mfg-facility-tab__table {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+  border: 1px solid var(--border, rgb(255 255 255 / 0.1));
+  border-radius: 8px;
+}
+
+.mfg-facility-tab__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 110px 110px 110px 72px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, rgb(255 255 255 / 0.08));
+  font-size: 12px;
+}
+
+.mfg-facility-tab__row:last-child {
+  border-bottom: none;
+}
+
+.mfg-facility-tab__head {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--card, #0a1118);
+  font-size: 11px;
+  color: var(--muted-foreground, #94a3b8);
+}
+
+@media (max-width: 900px) {
+  .mfg-facility-tab__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
