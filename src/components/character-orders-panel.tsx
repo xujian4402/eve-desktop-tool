@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
@@ -47,6 +48,7 @@ import {
   type OrderMarketPrice,
 } from "@/lib/db";
 import { formatOrderRange } from "@/lib/order-labels";
+import { fetchRegionBestSell, JITA_REGION_ID } from "@/lib/market/price-api";
 import { AUTO_SYNC_OPTIONS, useOrderSyncStore } from "@/stores/order-sync-store";
 
 /** 判断自己的挂单在同建筑里的价格位置 */
@@ -311,6 +313,25 @@ export default function CharacterOrdersPanel({
   };
 
   const characterIds = characters.map((item) => item.character_id).join(",");
+
+  /** 所有订单涉及的物品（去重），用于批量拉 Jita 价格 */
+  const orderTypeIds = useMemo(() => {
+    const set = new Set<number>();
+    for (const list of Object.values(ordersMap)) {
+      for (const order of list) set.add(order.type_id);
+    }
+    return [...set];
+  }, [ordersMap]);
+
+  /** Jita 最低卖价：仅作展示，不参与排序与盈亏计算 */
+  const jitaQuery = useQuery({
+    queryKey: ["jita-best-sell", orderTypeIds.join(",")],
+    queryFn: () => fetchRegionBestSell(JITA_REGION_ID, orderTypeIds),
+    enabled: orderTypeIds.length > 0,
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const jitaPrices = jitaQuery.data ?? {};
 
   // 默认停在当前角色；角色列表变化时校正
   useEffect(() => {
@@ -609,6 +630,7 @@ export default function CharacterOrdersPanel({
                           sort={sort}
                           onToggle={toggleSort}
                         />
+                        <TableHead>Jita 最低</TableHead>
                         <SortHeader
                           label="剩余 / 总量"
                           sortKey="volume"
@@ -699,6 +721,37 @@ export default function CharacterOrdersPanel({
                               )}
                             >
                               {competition.text}
+                            </TableCell>
+
+                            <TableCell className="whitespace-nowrap tabular-nums text-[11px] text-cyan-300/90">
+                              {(() => {
+                                if (jitaQuery.isPending) {
+                                  return (
+                                    <span className="text-muted-foreground/50">
+                                      …
+                                    </span>
+                                  );
+                                }
+
+                                const value = jitaPrices[String(order.type_id)];
+                                if (value === undefined) {
+                                  return (
+                                    <span className="text-muted-foreground/50">
+                                      —
+                                    </span>
+                                  );
+                                }
+                                if (value === null) {
+                                  return (
+                                    <span className="text-muted-foreground/60">
+                                      无卖单
+                                    </span>
+                                  );
+                                }
+                                return value.toLocaleString("zh-CN", {
+                                  maximumFractionDigits: 2,
+                                });
+                              })()}
                             </TableCell>
 
                             <TableCell className="tabular-nums">

@@ -126,6 +126,7 @@ pub fn run() {
             esi::fetch_character_colonies,
             esi::fetch_colony_detail,
             esi::fetch_region_type_orders,
+            esi::fetch_region_best_sell,
             esi::fetch_manufacturing_structures,
             esi::sync_market_groups,
             esi::seed_market_groups,

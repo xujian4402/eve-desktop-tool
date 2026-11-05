@@ -1902,3 +1902,70 @@ pub async fn fetch_region_type_orders(
 
     Ok(all)
 }
+
+/// 批量获取某星域的最低卖价（Jita 用 The Forge = 10000002）。
+///
+/// 每个物品单独请求，分批并发，避免一次性打爆 ESI 错误预算。
+/// 返回 type_id → 最低卖价；null 表示该物品在星域内没有卖单。
+/// 仅用于界面展示，不参与任何计算。
+#[tauri::command]
+pub async fn fetch_region_best_sell(
+    region_id: i64,
+    type_ids: Vec<i64>,
+) -> Result<std::collections::HashMap<i64, Option<f64>>, String> {
+    /// 每批并发数
+    const BATCH: usize = 6;
+    /// 单次最多查多少个物品
+    const MAX_TYPES: usize = 300;
+
+    let mut result: std::collections::HashMap<i64, Option<f64>> =
+        std::collections::HashMap::new();
+
+    // 去重并限制数量
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<i64> = type_ids
+        .into_iter()
+        .filter(|id| seen.insert(*id))
+        .take(MAX_TYPES)
+        .collect();
+
+    for chunk in ids.chunks(BATCH) {
+        let mut set = tokio::task::JoinSet::new();
+
+        for type_id in chunk.iter().copied() {
+            set.spawn(async move {
+                let response = http()
+                    .get(format!("{ESI_BASE}/markets/{region_id}/orders/"))
+                    .query(&[
+                        ("datasource", "tranquility"),
+                        ("type_id", &type_id.to_string()),
+                        ("order_type", "sell"),
+                    ])
+                    .send()
+                    .await
+                    .ok()?;
+
+                if !response.status().is_success() {
+                    return Some((type_id, None));
+                }
+
+                let rows = response.json::<Vec<EsiRegionOrder>>().await.ok()?;
+                let best = rows
+                    .iter()
+                    .filter(|row| !row.is_buy_order)
+                    .map(|row| row.price)
+                    .fold(f64::INFINITY, f64::min);
+
+                Some((type_id, if best.is_finite() { Some(best) } else { None }))
+            });
+        }
+
+        while let Some(joined) = set.join_next().await {
+            if let Ok(Some((type_id, price))) = joined {
+                result.insert(type_id, price);
+            }
+        }
+    }
+
+    Ok(result)
+}
