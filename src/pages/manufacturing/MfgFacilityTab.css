@@ -34,7 +34,7 @@
 
 .mfg-facility-tab__row {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) 110px 110px 110px 72px;
+  grid-template-columns: minmax(0, 1.6fr) 110px 110px 110px 132px;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;

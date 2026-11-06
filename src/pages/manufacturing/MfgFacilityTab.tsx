@@ -8,12 +8,24 @@ import { Input } from "@/components/ui/input";
 import {
   listIndustryFacilities,
   listStructures,
+  removeIndustryFacility,
+  removeStructure,
   upsertIndustryFacility,
   upsertStructure,
   type IndustryFacilityRow,
   type MarketStructure,
   type StructureInfo,
 } from "@/lib/db";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { describeError, useCharacters } from "@/hooks/useCharacters";
 import { fetchManufacturingStructures } from "@/lib/manufacturing/api";
 
@@ -56,6 +68,11 @@ export default function MfgFacilityTab() {
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const [error, setError] = useState<string | null>(null);
   const [fetching, setFetching] = useState(false);
+  /** 待删除的建筑（确认弹窗用） */
+  const [pendingDelete, setPendingDelete] = useState<MarketStructure | null>(
+    null,
+  );
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -159,6 +176,30 @@ export default function MfgFacilityTab() {
     }
   };
 
+  /**
+   * 删除建筑：连同本地订单快照与制造配置一起移除。
+   *
+   * 建筑记录被删后，「成本计算」的建筑下拉也会同步消失。
+   */
+  const handleDelete = async () => {
+    if (!pendingDelete) return;
+
+    setDeleting(true);
+    try {
+      const id = pendingDelete.structure_id;
+      await removeIndustryFacility(id);
+      await removeStructure(id);
+      await load();
+      await refreshCalculator();
+      toast.success(`已删除：${pendingDelete.name ?? `#${id}`}`);
+      setPendingDelete(null);
+    } catch (err) {
+      toast.error(describeError(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="mfg-facility-tab">
       <div className="mfg-facility-tab__toolbar">
@@ -198,7 +239,7 @@ export default function MfgFacilityTab() {
             <span>材料减免 %</span>
             <span>时间减免 %</span>
             <span>结构税 %</span>
-            <span />
+            <span className="text-right">操作</span>
           </div>
 
           {structures.map((structure) => {
@@ -276,19 +317,56 @@ export default function MfgFacilityTab() {
                   className="h-7 text-right text-[11px]"
                 />
 
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-[11px]"
-                  onClick={() => void handleSave(structure)}
-                >
-                  保存
-                </Button>
+                <div className="flex justify-end gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => void handleSave(structure)}
+                  >
+                    保存
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
+                    onClick={() => setPendingDelete(structure)}
+                    title="从本地移除该建筑及其订单与制造配置"
+                  >
+                    删除
+                  </Button>
+                </div>
               </div>
             );
           })}
         </div>
       )}
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除建筑？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将从本地移除「{pendingDelete?.name ?? "该建筑"}」、
+              已同步的订单快照与制造配置，此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={() => void handleDelete()}
+            >
+              {deleting ? "删除中…" : "删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
