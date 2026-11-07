@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 
 use crate::eve_auth::{cached_access_token, chrono_now_ms, refresh_access_token};
 
-const ESI_BASE: &str = "https://esi.evetech.net/latest";
+pub(crate) const ESI_BASE: &str = "https://esi.evetech.net/latest";
 
 /// 分页安全上限：100 页 ≈ 10 万条订单，避免异常建筑打爆内存
 const MAX_ORDER_PAGES: usize = 100;
@@ -48,10 +48,13 @@ pub(crate) async fn ensure_token(
 }
 
 /// ID → 名称（公开接口，失败返回 None 不阻断主流程）
-async fn resolve_name(id: i64) -> Option<String> {
+///
+/// 带 `Accept-Language: zh`：ESI 会返回中文名，避免界面出现纯英文。
+pub(crate) async fn resolve_name(id: i64) -> Option<String> {
     let response = http()
         .post(format!("{ESI_BASE}/universe/names/"))
         .query(&[("datasource", "tranquility")])
+        .header("Accept-Language", "zh")
         .json(&[id])
         .send()
         .await
@@ -306,7 +309,7 @@ where
     Ok((all, truncated, cache_expires_at))
 }
 
-const RATE_LIMIT_HINT: &str = "ESI 限流（错误预算耗尽），请等待一分钟后再试";
+pub(crate) const RATE_LIMIT_HINT: &str = "ESI 限流（错误预算耗尽），请等待一分钟后再试";
 
 /// 同步某建筑的全部市场订单
 #[tauri::command]
@@ -1142,7 +1145,7 @@ pub async fn fetch_character_asset_totals(
 ///
 /// ESI 的 /universe/names/ 只返回英文，直接用它会让资产、订单里的物品名
 /// 全变成英文；本地 SDE 已经导入了 5 万多条中文名，先查本地又快又准。
-async fn resolve_names_bulk(
+pub(crate) async fn resolve_names_bulk(
     pool: &SqlitePool,
     ids: &[i64],
 ) -> HashMap<i64, String> {

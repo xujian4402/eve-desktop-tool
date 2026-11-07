@@ -122,7 +122,7 @@ export function AssetsPanel({
 }
 
 /** 单个角色的资产视图（搜索 / 位置过滤 / 分页表格） */
-function CharacterAssets({ characterId }: { characterId: number }) {
+export function CharacterAssets({ characterId }: { characterId: number }) {
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(0);
   /** 位置过滤：null 表示全部位置 */

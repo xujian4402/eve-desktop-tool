@@ -2,6 +2,7 @@
 mod crypto;
 mod db;
 mod esi;
+mod esi_character;
 mod esi_industry;
 mod eve_auth;
 mod monitor;
@@ -127,6 +128,7 @@ pub fn run() {
             esi::fetch_colony_detail,
             esi::fetch_region_type_orders,
             esi::fetch_region_best_sell,
+            esi_character::fetch_character_detail,
             esi::fetch_manufacturing_structures,
             esi::sync_market_groups,
             esi::seed_market_groups,

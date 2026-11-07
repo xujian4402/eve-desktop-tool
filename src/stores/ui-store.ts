@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type AccountTab = "characters" | "assets" | "permissions";
+export type AccountTab = "characters" | "detail" | "permissions";
 
 /**
  * 市场页的标签页：交易市场 / 我的订单 / 订单分析 / 市场差价对比 / 销量分析。
