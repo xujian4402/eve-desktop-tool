@@ -18,6 +18,7 @@ import MarketPage from "./pages/MarketPage";
 import MonitorPage from "./pages/MonitorPage";
 import PlanetaryPage from "./pages/PlanetaryPage";
 import { Toaster } from "@/components/ui/sonner";
+import { initVisionRuntime } from "@/lib/monitor/vision-runtime";
 import { useMonitorStore } from "@/stores/monitor-store";
 import { useOrderSyncStore } from "@/stores/order-sync-store";
 import type { MenuKey } from "./lib/nav";
@@ -94,6 +95,11 @@ function App() {
   useEffect(() => {
     initMonitor();
   }, [initMonitor]);
+
+  // 视觉预警同为全局：切菜单时后台截屏与循环报警都不中断
+  useEffect(() => {
+    initVisionRuntime();
+  }, []);
 
   const current = MENUS.find((menu) => menu.key === activeMenu) ?? MENUS[0];
 

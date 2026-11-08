@@ -7,6 +7,7 @@ mod esi_industry;
 mod eve_auth;
 mod monitor;
 mod tray;
+mod vision;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -143,7 +144,12 @@ pub fn run() {
             monitor::scan_chat_once,
             monitor::start_monitor,
             monitor::stop_monitor,
-            monitor::read_audio_file
+            monitor::read_audio_file,
+            vision::list_monitors,
+            vision::probe_vision_region,
+            vision::start_vision_watch,
+            vision::stop_vision_watch,
+            vision::vision_watch_running
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

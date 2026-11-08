@@ -101,6 +101,76 @@ export async function scanChatOnce(
   return invoke<ChatScanReport>("scan_chat_once", { config });
 }
 
+/* ---------------- 视觉预警（截屏找红点） ---------------- */
+
+export interface VisionConfig {
+  /** 区域左上角屏幕坐标 */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** 至少多少个红色像素才算命中 */
+  minPixels: number;
+  /** 轮询间隔（毫秒） */
+  intervalMs: number;
+  /** 命中冷却（毫秒） */
+  cooldownMs: number;
+}
+
+export interface VisionProbe {
+  redPixels: number;
+  totalPixels: number;
+  hit: boolean;
+  /** 截屏是否成功（区域越界或权限不足时为 false） */
+  captured: boolean;
+  /** 区域预览（data:image/png;base64,...） */
+  preview: string | null;
+}
+
+export interface VisionAlert {
+  redPixels: number;
+  /** 命中时间（unix 毫秒） */
+  at: number;
+}
+
+/** 一台显示器在虚拟桌面中的位置 */
+export interface MonitorInfo {
+  index: number;
+  /** 设备名，如 DISPLAY1 */
+  name: string;
+  /** 虚拟桌面坐标（左上角，多显示器时可能为负） */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+
+/** 列出所有显示器及其虚拟桌面坐标 */
+export async function listMonitors(): Promise<MonitorInfo[]> {
+  return invoke<MonitorInfo[]>("list_monitors");
+}
+
+/** 单次检测：截屏指定区域并统计红色像素 */
+export async function probeVisionRegion(
+  config: VisionConfig,
+): Promise<VisionProbe> {
+  return invoke<VisionProbe>("probe_vision_region", { config });
+}
+
+export async function startVisionWatch(config: VisionConfig): Promise<void> {
+  return invoke("start_vision_watch", { config });
+}
+
+export async function stopVisionWatch(): Promise<void> {
+  return invoke("stop_vision_watch");
+}
+
+/** 视觉预警线程是否在运行 */
+export async function visionWatchRunning(): Promise<boolean> {
+  return invoke<boolean>("vision_watch_running");
+}
+
 /** 把逗号 / 换行分隔的文本拆成关键字数组 */
 export function splitKeywords(text: string): string[] {
   return text

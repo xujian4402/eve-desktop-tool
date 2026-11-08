@@ -9,6 +9,7 @@ import { useMonitorStore } from "@/stores/monitor-store";
 
 import AlertMonitorTab from "./monitor/AlertMonitorTab";
 import BattleMonitorTab from "./monitor/BattleMonitorTab";
+import VisionMonitorTab from "./monitor/VisionMonitorTab";
 import "./MonitorPage.css";
 
 /**
@@ -46,6 +47,7 @@ export default function MonitorPage() {
         <TabsList className="monitor-page__tabslist">
           <TabsTrigger value="battle">战斗监控</TabsTrigger>
           <TabsTrigger value="alert">预警监控</TabsTrigger>
+          <TabsTrigger value="vision">视觉预警</TabsTrigger>
         </TabsList>
 
         <div className="monitor-page__bar">
@@ -112,6 +114,15 @@ export default function MonitorPage() {
           className="monitor-page__content data-[state=inactive]:hidden"
         >
           <AlertMonitorTab />
+        </TabsContent>
+
+        {/* forceMount：切到别的标签时不卸载，后台截屏与循环报警继续运行 */}
+        <TabsContent
+          forceMount
+          value="vision"
+          className="monitor-page__content data-[state=inactive]:hidden"
+        >
+          <VisionMonitorTab />
         </TabsContent>
       </Tabs>
     </div>

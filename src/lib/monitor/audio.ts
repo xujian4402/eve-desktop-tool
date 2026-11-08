@@ -118,6 +118,88 @@ async function ensureUrl(path: string): Promise<string | null> {
   }
 }
 
+/* ---------------- 应用内音效（public 目录） ---------------- */
+
+/** 音效元素缓存：复用同一个 Audio，重播只改 currentTime */
+const assetAudios = new Map<string, HTMLAudioElement>();
+
+/**
+ * 预加载应用内音效。
+ *
+ * 路径相对前端根目录（`public/sound.wav` 构建后位于 `/sound.wav`），
+ * 不依赖安装位置，也不需要通过 Rust 读文件。
+ */
+export function preloadAssetSound(path: string): void {
+  if (assetAudios.has(path)) return;
+
+  try {
+    const audio = new Audio(path);
+    audio.preload = "auto";
+    audio.load();
+    assetAudios.set(path, audio);
+  } catch {
+    // 预加载失败时，播放阶段会回退到内置蜂鸣
+  }
+}
+
+/**
+ * 循环播放应用内音效，直到调用 `stopAssetSound`。
+ *
+ * 视觉预警用：红点出现后持续报警，消失才停，中间不留间隔。
+ */
+export function playLoopingAssetSound(path: string, volume = 0.9): void {
+  try {
+    let audio = assetAudios.get(path);
+
+    if (!audio) {
+      audio = new Audio(path);
+      audio.preload = "auto";
+      assetAudios.set(path, audio);
+    }
+
+    audio.loop = true;
+    audio.volume = Math.min(1, Math.max(0, volume));
+
+    // 已经在播就不用重头开始，避免反复重置造成断点
+    if (!audio.paused) return;
+
+    audio.currentTime = 0;
+    void audio.play().catch(() => playBeep(volume));
+  } catch {
+    playBeep(volume);
+  }
+}
+
+/** 停止循环播放的应用内音效 */
+export function stopAssetSound(path: string): void {
+  const audio = assetAudios.get(path);
+  if (!audio) return;
+
+  audio.pause();
+  audio.loop = false;
+  audio.currentTime = 0;
+}
+
+/** 播放应用内音效；失败时回退内置蜂鸣 */
+export function playAssetSound(path: string, volume = 0.9): void {
+  try {
+    let audio = assetAudios.get(path);
+
+    if (!audio) {
+      audio = new Audio(path);
+      audio.preload = "auto";
+      assetAudios.set(path, audio);
+    }
+
+    audio.volume = Math.min(1, Math.max(0, volume));
+    audio.currentTime = 0;
+
+    void audio.play().catch(() => playBeep(volume));
+  } catch {
+    playBeep(volume);
+  }
+}
+
 /** 内置提示音：两声短促蜂鸣 */
 export function playBeep(volume = 0.8): void {
   try {
