@@ -347,7 +347,7 @@ export default function AlertMonitorTab() {
 
         <div className="alert-monitor-tab__field alert-monitor-tab__field--full">
           <span className="alert-monitor-tab__label">
-            测试匹配（把游戏里那句话粘进来，验证关键字是否命中）
+            测试匹配（粘贴整行或消息正文，验证星系名 / 角色名是否命中）
           </span>
           <div className="flex max-w-[520px] gap-1.5">
             <Input
@@ -383,7 +383,7 @@ export default function AlertMonitorTab() {
 
         <p className="alert-monitor-tab__hint">
           频道名与游戏内频道名一致即可（中文频道名也会匹配），留空则不会触发预警；
-          同一星系名 3 秒内只提醒一次。
+          消息内容包含星系名时提醒，同一星系名 3 秒内只提醒一次。
           {isTts
             ? speechLoop
               ? " 循环朗读：读完立即重读，直到点顶部「确认」。"

@@ -2,6 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Play, ScanLine, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -23,6 +31,7 @@ import {
   type VisionProbe,
 } from "@/lib/monitor/api";
 import {
+  clearVisionAlerts,
   getVisionAlerts,
   silenceVision,
   subscribeVisionAlerts,
@@ -31,7 +40,33 @@ import {
 import { cn } from "@/lib/utils";
 
 const CONFIG_KEY = "vision-watch-config-v1";
+const PRESET_KEY = "vision-watch-presets-v1";
 const MAX_LOG = 100;
+
+/** 一套命名参数（区域 + 检测阈值） */
+interface VisionPreset {
+  name: string;
+  config: VisionConfig;
+}
+
+function readPresets(): VisionPreset[] {
+  try {
+    const raw = localStorage.getItem(PRESET_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as VisionPreset[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePresets(list: VisionPreset[]): void {
+  try {
+    localStorage.setItem(PRESET_KEY, JSON.stringify(list));
+  } catch {
+    // 存储不可用时忽略
+  }
+}
 
 const DEFAULT_CONFIG: VisionConfig = {
   x: 200,
@@ -78,6 +113,11 @@ export default function VisionMonitorTab() {
   /** 显示器列表与当前选择（多显示器时用来快速定位坐标） */
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [monitorIndex, setMonitorIndex] = useState("0");
+  /** 参数预设 */
+  const [presets, setPresets] = useState<VisionPreset[]>(readPresets);
+  const [selectedPreset, setSelectedPreset] = useState("");
+  const [presetName, setPresetName] = useState("");
+  const [saveOpen, setSaveOpen] = useState(false);
 
   useEffect(() => {
     void listMonitors()
@@ -192,6 +232,37 @@ export default function VisionMonitorTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
+  /** 保存当前参数为命名预设（同名覆盖） */
+  const handleSavePreset = () => {
+    const name = presetName.trim();
+    if (!name) return;
+
+    const next: VisionPreset[] = [
+      { name, config },
+      ...presets.filter((item) => item.name !== name),
+    ];
+
+    writePresets(next);
+    setPresets(next);
+    setSelectedPreset(name);
+    setSaveOpen(false);
+    setPresetName("");
+  };
+
+  /** 载入预设 */
+  const handleLoadPreset = (name: string) => {
+    const preset = presets.find((item) => item.name === name);
+    if (preset) patch(preset.config);
+  };
+
+  /** 删除预设 */
+  const handleDeletePreset = (name: string) => {
+    const next = presets.filter((item) => item.name !== name);
+    writePresets(next);
+    setPresets(next);
+    setSelectedPreset("");
+  };
+
   /** 把区域直接对齐到所选显示器（用户再手动缩小到总览区域） */
   const applyMonitor = () => {
     const monitor = monitors.find(
@@ -272,6 +343,70 @@ export default function VisionMonitorTab() {
       {/* 区域与参数 + 预览 */}
       <div className="flex flex-wrap items-stretch gap-3 rounded-lg border border-border/70 bg-card/40 p-3">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/* 参数预设：一套区域 + 阈值，命名保存后一键切换 */}
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-muted-foreground">
+                参数预设
+              </span>
+              <Select
+                value={selectedPreset}
+                onValueChange={setSelectedPreset}
+                disabled={running || presets.length === 0}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="h-7 w-[180px] text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <SelectValue
+                    placeholder={
+                      presets.length === 0 ? "还没有预设" : "选择预设"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {presets.map((preset) => (
+                    <SelectItem key={preset.name} value={preset.name}>
+                      {preset.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={running || !selectedPreset}
+              onClick={() => handleLoadPreset(selectedPreset)}
+              title="把选中预设的参数应用到当前配置"
+            >
+              加载参数
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={running}
+              onClick={() => setSaveOpen(true)}
+              title="把当前区域与阈值保存为预设"
+            >
+              保存参数
+            </Button>
+
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-destructive hover:text-destructive"
+              disabled={running || !selectedPreset}
+              onClick={() => handleDeletePreset(selectedPreset)}
+            >
+              删除预设
+            </Button>
+          </div>
+
           {/* 多显示器：显示各屏坐标，一键对齐 */}
           <div className="flex flex-wrap items-end gap-2">
             <label className="flex flex-col gap-0.5">
@@ -437,7 +572,10 @@ export default function VisionMonitorTab() {
           <button
             type="button"
             className="text-[10px] text-muted-foreground/60 hover:text-foreground"
-            onClick={() => setAlerts([])}
+            onClick={() => {
+              clearVisionAlerts();
+              setAlerts([]);
+            }}
           >
             清空
           </button>
@@ -466,6 +604,49 @@ export default function VisionMonitorTab() {
           </div>
         )}
       </div>
+
+      {/* 保存参数对话框 */}
+      <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>保存参数</DialogTitle>
+            <DialogDescription>
+              保存当前的区域坐标与检测阈值，下次可从「参数预设」一键载入。
+              同名会覆盖。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] text-muted-foreground">预设名称</span>
+            <Input
+              value={presetName}
+              onChange={(event) => setPresetName(event.target.value)}
+              placeholder="例如：总览红点"
+              className="h-8 text-xs"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleSavePreset();
+              }}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setSaveOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              disabled={!presetName.trim()}
+              onClick={handleSavePreset}
+            >
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

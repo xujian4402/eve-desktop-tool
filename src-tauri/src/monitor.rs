@@ -52,8 +52,14 @@ const MAX_CHAT_PREVIEW_PER_ROUND: usize = 40;
 /// 启动时回放每个频道最近的多少条消息
 const CHAT_REPLAY_LINES: usize = 20;
 
-/// 聊天文件参与扫描的时间窗口：太短的窗口会让「安静频道」被漏掉
-const CHAT_FILE_MAX_AGE_SECS: u64 = 3600;
+/// 每个频道最多跟随几个日志文件。
+///
+/// 多开角色时每个角色一个文件，跨天时还会多出新的会话文件；
+/// 取文件名最新的前 6 个足以覆盖近期活跃的会话。
+const MAX_CHAT_FILES_PER_CHANNEL: usize = 6;
+
+/// 启动回放时每个频道取几个文件（比实时扫描更保守，避免刷屏）
+const PREVIEW_FILES_PER_CHANNEL: usize = 2;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -113,12 +119,14 @@ pub fn read_audio_file(path: String) -> Result<Vec<u8>, String> {
 /// 不会报「已在运行」，也不会出现两个线程同时推送事件。
 #[tauri::command]
 pub fn start_monitor(app: AppHandle, config: MonitorConfig) -> Result<(), String> {
-    if config.battle_keywords.is_empty() && config.chat_keywords.is_empty() {
+    let chat_enabled = !config.chat_keywords.is_empty();
+
+    if config.battle_keywords.is_empty() && !chat_enabled {
         return Err("请至少填写一个监控关键字".to_string());
     }
 
     // 预警频道先校验：填错频道名时直接告诉用户当前日志里有哪些频道
-    if !config.chat_keywords.is_empty() {
+    if chat_enabled {
         validate_channels(&config.log_dir, &config.chat_channels)?;
     }
 
@@ -288,54 +296,48 @@ fn emit_chat_preview(app: &AppHandle, config: &MonitorConfig) {
     }
 
     let dir = Path::new(&config.log_dir).join("Chatlogs");
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return;
-    };
 
-    let now = SystemTime::now();
+    // 回放只取每个频道最新的几个文件，避免启动时刷出几百条历史
+    let files = chat_files(dir.as_path());
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("txt") {
-            continue;
-        }
+    for channel in &config.chat_channels {
+        let prefix = format!("{}_", channel.to_lowercase());
+        let mut picked = 0usize;
 
-        let name = entry.file_name().to_string_lossy().to_string();
-        let lower_name = name.to_lowercase();
-
-        let Some(channel) = config.chat_channels.iter().find(|channel| {
-            lower_name.starts_with(&format!("{}_", channel.to_lowercase()))
-        }) else {
-            continue;
-        };
-
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
-
-        if now.duration_since(modified).unwrap_or_default()
-            > Duration::from_secs(CHAT_FILE_MAX_AGE_SECS)
-        {
-            continue;
-        }
-
-        for line in tail_lines(&path, CHAT_REPLAY_LINES) {
-            let plain = strip_tags(&line);
-            let Some((head, message)) = plain.split_once(" > ") else {
+        for (path, source) in &files {
+            if picked >= PREVIEW_FILES_PER_CHANNEL {
+                break;
+            }
+            if !source.to_lowercase().starts_with(&prefix) {
                 continue;
-            };
+            }
 
-            let speaker = head.split(" ] ").nth(1).unwrap_or("").trim().to_string();
+            picked += 1;
 
-            let _ = app.emit(
-                "chat-line",
-                ChatLine {
-                    channel: channel.clone(),
-                    time: parse_time(&plain),
-                    speaker,
-                    message: message.trim().to_string(),
-                    raw: plain,
-                },
-            );
+            for line in tail_lines(path, CHAT_REPLAY_LINES) {
+                let plain = strip_tags(&line);
+                let Some((head, message)) = plain.split_once(" > ") else {
+                    continue;
+                };
+
+                let speaker = head
+                    .split(" ] ")
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+
+                let _ = app.emit(
+                    "chat-line",
+                    ChatLine {
+                        channel: channel.clone(),
+                        time: parse_time(&plain),
+                        speaker,
+                        message: message.trim().to_string(),
+                        raw: plain,
+                    },
+                );
+            }
         }
     }
 }
@@ -361,44 +363,30 @@ fn tick(app: &AppHandle, config: &MonitorConfig) -> bool {
     active
 }
 
-/// 目录内最近修改的 txt 文件（最多 8 个，按修改时间倒序）
-fn recent_files(dir: &Path, max_age: Duration) -> Vec<(PathBuf, String)> {
+/// 列出目录内全部 txt 文件，按文件名倒序。
+///
+/// **不调用 `metadata()`**：Chatlogs 目录动辄几千个历史文件（实测单频道上千个），
+/// 每次都对全部文件 stat 会让轮询周期被拖长，跨天累积后甚至表现为「读不到新文件」。
+///
+/// EVE 文件名格式为 `频道_YYYYMMDD_HHMMSS_角色ID.txt`，同一频道内前缀相同，
+/// 因此字符串倒序即可让最新的会话排在前面。
+fn chat_files(dir: &Path) -> Vec<(PathBuf, String)> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
 
-    let now = SystemTime::now();
-    let mut files: Vec<(PathBuf, SystemTime)> = Vec::new();
+    let mut files: Vec<(PathBuf, String)> = Vec::new();
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("txt") {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".txt") {
             continue;
         }
-
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
-
-        if now.duration_since(modified).unwrap_or_default() > max_age {
-            continue;
-        }
-
-        files.push((path, modified));
+        files.push((entry.path(), name));
     }
 
     files.sort_by(|a, b| b.1.cmp(&a.1));
-    files.truncate(8);
-
     files
-        .into_iter()
-        .map(|(path, _)| {
-            let name = path
-                .file_name()
-                .map(|item| item.to_string_lossy().to_string())
-                .unwrap_or_default();
-            (path, name)
-        })
-        .collect()
 }
 
 /* ---------------- 战斗：只跟随最新文件 ---------------- */
@@ -510,23 +498,34 @@ fn pick_battle_file(dir: &Path) -> Option<PathBuf> {
 
 fn scan_chat(app: &AppHandle, dir: &Path, config: &MonitorConfig) -> bool {
     let mut active = false;
+    let files = chat_files(dir);
 
-    for (path, source) in recent_files(dir, Duration::from_secs(CHAT_FILE_MAX_AGE_SECS)) {
-        // 频道文件名格式：频道名_日期_时间_角色ID.txt
-        // 比较时忽略大小写：Windows 文件名本身不区分大小写，配置里手打的大小写不应影响匹配
-        let lower_source = source.to_lowercase();
-        let Some(channel) = config.chat_channels.iter().find(|channel| {
-            lower_source.starts_with(&format!("{}_", channel.to_lowercase()))
-        }) else {
-            continue;
-        };
+    // 按频道分组：每个频道各自取最新的前几个文件，
+    // 避免多频道 / 多角色时被其它频道的文件挤占名额。
+    for channel in &config.chat_channels {
+        let prefix = format!("{}_", channel.to_lowercase());
+        let mut picked = 0usize;
 
-        // 每轮最多推送 40 条预览，避免启动瞬间把历史刷给前端
-        let mut preview_budget = MAX_CHAT_PREVIEW_PER_ROUND;
+        for (path, source) in &files {
+            if picked >= MAX_CHAT_FILES_PER_CHANNEL {
+                break;
+            }
 
-        for line in read_new_lines(&path) {
-            handle_chat_line(app, &line, &source, channel, config, &mut preview_budget);
-            active = true;
+            // 频道文件名格式：频道名_日期_时间_角色ID.txt
+            // 比较时忽略大小写：Windows 文件名不区分大小写
+            if !source.to_lowercase().starts_with(&prefix) {
+                continue;
+            }
+
+            picked += 1;
+
+            // 每轮最多推送 40 条预览，避免启动瞬间把历史刷给前端
+            let mut preview_budget = MAX_CHAT_PREVIEW_PER_ROUND;
+
+            for line in read_new_lines(path) {
+                handle_chat_line(app, &line, source, channel, config, &mut preview_budget);
+                active = true;
+            }
         }
     }
 
@@ -613,11 +612,18 @@ fn last_line_end(bytes: &[u8], encoding: TextEncoding) -> Option<usize> {
     }
 }
 
+/// 新发现的文件：最近多久内有写入就认为「刚新建的会话」，从头读。
+///
+/// 跨天 / 重新登录时客户端会新建 `频道_日期_时间_角色ID.txt`，
+/// 这类文件必须从头读，否则会跳过它最早的一批消息。
+/// 而目录里翻出来的陈年旧文件（mtime 很早）则直接跳到末尾，避免回放历史。
+const FRESH_FILE_SECS: u64 = 900;
+
 /// 读取文件新增的完整行；末尾不完整的行留到下一轮。
 ///
-/// 未登记的文件从 0 开始读：启动时已由 `prime_chat_offsets` 把当时的文件
-/// 登记为末尾，因此「未登记」只可能是启动后新建的会话文件，必须从头读，
-/// 否则会把新会话的第一批消息整段跳过。
+/// 未登记文件的初始位置：
+/// - mtime 很新（15 分钟内）→ 从 0 读，抓新会话开头的内容
+/// - mtime 较旧 → 直接跳到末尾，只跟后续新增
 fn read_new_lines(path: &Path) -> Vec<String> {
     let Ok(meta) = fs::metadata(path) else {
         return Vec::new();
@@ -625,8 +631,17 @@ fn read_new_lines(path: &Path) -> Vec<String> {
     let len = meta.len();
     let encoding = detect_encoding(path);
 
+    let fresh = meta
+        .modified()
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .map(|age| age.as_secs() <= FRESH_FILE_SECS)
+        .unwrap_or(false);
+
     let mut map = offsets().lock().unwrap();
-    let entry = map.entry(path.to_path_buf()).or_insert(0);
+    let entry = map
+        .entry(path.to_path_buf())
+        .or_insert(if fresh { 0 } else { len });
 
     // 文件被截断（客户端重启新建同名文件）
     if len < *entry {
@@ -844,8 +859,9 @@ pub fn scan_chat_once(config: MonitorConfig) -> Result<ChatScanReport, String> {
     let mut total_hits = 0;
 
     for (path, name, channel, modified) in files {
+        // 诊断报告里标出「超过 24 小时没写入」的文件，提示用户它可能已不再更新
         let in_window = now.duration_since(modified).unwrap_or_default()
-            <= Duration::from_secs(CHAT_FILE_MAX_AGE_SECS);
+            <= Duration::from_secs(24 * 3600);
 
         let matched_channel = config
             .chat_channels
