@@ -1,172 +1,165 @@
-import { useEffect, useState } from "react";
+import { useEffect, type ComponentType } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Database, Factory, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useCharacters } from "@/hooks/useCharacters";
-import { fetchCharacterSkills } from "@/lib/manufacturing/api";
-import { loadMfgData, type MfgData } from "@/lib/manufacturing/data";
-import { MENU_ACCOUNT, type MenuKey } from "@/lib/nav";
+import { getMfgSdeStatus, syncMfgSde } from "@/lib/mfg/api";
 
-import MfgBlueprintTab from "./manufacturing/MfgBlueprintTab";
-import MfgCalculatorTab from "./manufacturing/MfgCalculatorTab";
-import MfgFacilityTab from "./manufacturing/MfgFacilityTab";
-import MfgJobsTab from "./manufacturing/MfgJobsTab";
-import "./ManufacturingPage.css";
+import MfgCalculatorPage from "./manufacturing/MfgCalculatorPage";
+import MfgLocationPage from "./manufacturing/MfgLocationPage";
+import MfgMyIndustryPage from "./manufacturing/MfgMyIndustryPage";
+import MfgNpcBpPage from "./manufacturing/MfgNpcBpPage";
+import MfgPlanPage from "./manufacturing/MfgPlanPage";
+import MfgRankPage from "./manufacturing/MfgRankPage";
 
-interface ManufacturingPageProps {
-  onNavigate: (menu: MenuKey) => void;
-}
+/** 六个二级页面，对应参考项目的全部制造功能 */
+const TABS: Array<[string, string, ComponentType]> = [
+  ["calculator", "制造计算", MfgCalculatorPage],
+  ["plan", "制造规划", MfgPlanPage],
+  ["rank", "利润排行", MfgRankPage],
+  ["location", "制造地点", MfgLocationPage],
+  ["npc", "NPC 蓝图", MfgNpcBpPage],
+  ["my", "我的工业", MfgMyIndustryPage],
+];
 
 /**
- * 制造业外壳。
+ * 制造业。
  *
- * 蓝图数据（约 5,000 条）在这里加载一次后下发给各标签页，
- * 避免每个页签各自 import 同一份大 JSON。
+ * 功能对齐参考项目（eve-market-tool）：
+ * 制造计算（多级 BOM / 发明 / 制造地点）、制造规划、利润排行、
+ * NPC 蓝图、我的工业。计算全部在 Rust 侧完成。
  */
-export default function ManufacturingPage({
-  onNavigate,
-}: ManufacturingPageProps) {
-  const { characters, activeCharacter, loading, loadError } = useCharacters();
-  const [tab, setTab] = useState("blueprints");
-  const [data, setData] = useState<MfgData | null>(null);
-  const [dataError, setDataError] = useState<string | null>(null);
-  /** 当前角色的制造业技能等级（用于时间减免） */
-  const [skills, setSkills] = useState<Record<string, number>>({});
+export default function ManufacturingPage() {
+  const queryClient = useQueryClient();
 
-  const activeCharacterId = activeCharacter?.character_id ?? null;
+  const statusQuery = useQuery({
+    queryKey: ["mfg-sde-status"],
+    queryFn: getMfgSdeStatus,
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: () => syncMfgSde(true),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ["mfg-sde-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["mfg-products"] });
+
+      toast.success(
+        result.imported
+          ? `SDE 已导入：${result.blueprints} 条配方（${result.elapsedMs} ms）`
+          : "版本一致，已跳过导入",
+      );
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    },
+  });
+
+  const status = statusQuery.data;
+  const ready = status?.ready ?? false;
+
+  // 首次进入或 SDE 版本变化（例如新增 NPC 蓝图数据）时自动导入
+  const stale =
+    !!status &&
+    !!status.generatedAt &&
+    status.generatedAt !== status.bundledAt;
 
   useEffect(() => {
-    if (activeCharacterId === null) {
-      setSkills({});
-      return;
+    if (
+      statusQuery.isSuccess &&
+      status &&
+      (!status.ready || stale) &&
+      !syncMutation.isPending
+    ) {
+      syncMutation.mutate();
     }
-
-    let cancelled = false;
-    void fetchCharacterSkills(activeCharacterId)
-      .then((levels) => {
-        if (!cancelled) setSkills(levels);
-      })
-      .catch(() => {
-        // 缺 scope 或网络异常时按「无技能加成」继续，不影响其它功能
-        if (!cancelled) setSkills({});
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeCharacterId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void loadMfgData()
-      .then((loaded) => {
-        if (!cancelled) setData(loaded);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setDataError(err instanceof Error ? err.message : String(err));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner /> 正在打开本地数据库…
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>本地数据库不可用</AlertTitle>
-        <AlertDescription>{loadError}</AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (characters.length === 0) {
-    return (
-      <div className="mx-auto w-full max-w-[1400px]">
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>需要先授权 EVE 角色</EmptyTitle>
-            <EmptyDescription>
-              制造业需要读取角色的蓝图与生产队列，请先在个人中心完成角色授权。
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button onClick={() => onNavigate(MENU_ACCOUNT)}>前往个人中心</Button>
-          </EmptyContent>
-        </Empty>
-      </div>
-    );
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusQuery.isSuccess, status?.ready, stale]);
 
   return (
-    <div className="manufacturing-page">
-      {dataError && (
-        <Alert variant="destructive" className="mb-3 shrink-0">
-          <AlertTitle>蓝图数据加载失败</AlertTitle>
-          <AlertDescription>{dataError}</AlertDescription>
-        </Alert>
+    <div className="mx-auto flex min-h-0 w-full max-w-[1280px] flex-1 flex-col">
+      <header className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-semibold">
+            <Factory className="size-5" />
+            制造业
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            蓝图配方、成本核算、多级 BOM、规划与利润排行
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded border border-border/60 px-2 py-1 text-[11px] text-muted-foreground">
+            <Database className="size-3" />
+            {statusQuery.isPending
+              ? "读取 SDE 状态…"
+              : ready
+                ? `配方 ${status?.blueprints ?? 0} · 发明 ${status?.inventions ?? 0} · 类型 ${status?.types ?? 0}`
+                : "SDE 未导入"}
+          </span>
+
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1 text-xs"
+            disabled={syncMutation.isPending}
+            onClick={() => syncMutation.mutate()}
+          >
+            {syncMutation.isPending ? (
+              <Spinner className="size-3.5" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+            {syncMutation.isPending ? "导入中…" : "导入 SDE"}
+          </Button>
+        </div>
+      </header>
+
+      {statusQuery.isError && (
+        <p className="mb-2 shrink-0 text-[11px] text-rose-400">
+          读取 SDE 状态失败：
+          {statusQuery.error instanceof Error
+            ? statusQuery.error.message
+            : String(statusQuery.error)}
+        </p>
       )}
 
-      <Tabs
-        value={tab}
-        onValueChange={setTab}
-        className="flex min-h-0 flex-1 flex-col"
-      >
-        <TabsList className="gap-1.5">
-          <TabsTrigger value="blueprints">蓝图资产</TabsTrigger>
-          <TabsTrigger value="calculator">成本计算</TabsTrigger>
-          <TabsTrigger value="jobs">生产队列</TabsTrigger>
-          <TabsTrigger value="facilities">建筑配置</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="blueprints" className="manufacturing-page__content">
-          <MfgBlueprintTab
-            characters={characters}
-            activeCharacterId={activeCharacterId}
-            data={data}
-          />
-        </TabsContent>
-
-        <TabsContent
-          value="calculator"
-          forceMount
-          className="manufacturing-page__content data-[state=inactive]:hidden"
+      {!ready && !statusQuery.isPending ? (
+        <p className="text-[11px] text-muted-foreground/60">
+          SDE 数据未导入，正在自动导入（约 0.2 秒）。
+        </p>
+      ) : (
+        <Tabs
+          defaultValue="calculator"
+          className="flex min-h-0 flex-1 flex-col gap-0"
         >
-          <MfgCalculatorTab data={data} skills={skills} />
-        </TabsContent>
+          <TabsList className="h-8 w-full shrink-0 justify-start gap-1 overflow-x-auto">
+            {TABS.map(([value, label]) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                className="h-7 shrink-0 px-2 text-[11px]"
+              >
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-        <TabsContent value="jobs" className="manufacturing-page__content">
-          <MfgJobsTab
-            characters={characters}
-            activeCharacterId={activeCharacterId}
-            data={data}
-          />
-        </TabsContent>
-
-        <TabsContent value="facilities" className="manufacturing-page__content">
-          <MfgFacilityTab />
-        </TabsContent>
-      </Tabs>
+          {TABS.map(([value, , Component]) => (
+            <TabsContent
+              key={value}
+              forceMount
+              value={value}
+              className="mt-2 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+            >
+              <Component />
+            </TabsContent>
+          ))}
+        </Tabs>
+      )}
     </div>
   );
 }

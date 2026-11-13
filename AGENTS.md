@@ -4,8 +4,8 @@ AGENTS.md
 
 不需要构建验证
 
-参考./eve-faceless-next项目
+参考 D:\xujian\eve-market-tool
 
 [静态资源](eve-online-static-data)
 
-eveonline OpenAPI 3.1 JSON: https://esi.evetech.net/meta/openapi.json
+eveonline OpenAPI [API](esi-openapi.json)

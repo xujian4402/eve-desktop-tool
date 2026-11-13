@@ -44,7 +44,7 @@ const MENUS: MenuItem[] = [
   {
     key: "manufacturing",
     label: "制造业",
-    description: "蓝图资产、成本计算、生产队列与建筑配置。",
+    description: "蓝图配方、成本计算、多级 BOM、规划与利润排行。",
   },
   {
     key: "monitor",
@@ -108,7 +108,7 @@ function App() {
       case "planetary":
         return <PlanetaryPage />;
       case "manufacturing":
-        return <ManufacturingPage onNavigate={setActiveMenu} />;
+        return <ManufacturingPage />;
       case "monitor":
         return <MonitorPage />;
       case "market":

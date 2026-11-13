@@ -5,6 +5,7 @@ mod esi;
 mod esi_character;
 mod esi_industry;
 mod eve_auth;
+mod mfg;
 mod monitor;
 mod tray;
 mod vision;
@@ -73,6 +74,24 @@ pub fn run() {
             sql: include_str!("../migrations/0008_manufacturing.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "drop_manufacturing",
+            sql: include_str!("../migrations/0009_drop_manufacturing.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 10,
+            description: "manufacturing_v2",
+            sql: include_str!("../migrations/0010_manufacturing_v2.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 11,
+            description: "manufacturing_full",
+            sql: include_str!("../migrations/0011_manufacturing_full.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -130,16 +149,30 @@ pub fn run() {
             esi::fetch_region_type_orders,
             esi::fetch_region_best_sell,
             esi_character::fetch_character_detail,
-            esi::fetch_manufacturing_structures,
+            mfg::sync::mfg_sync_sde,
+            mfg::sync::mfg_sde_status,
+            mfg::sync::mfg_facility_types,
+            mfg::sync::mfg_rigs,
+            mfg::query::mfg_search_products,
+            mfg::query::mfg_recipe,
+            mfg::query::mfg_type_names,
+            mfg::calc::mfg_calc_preview,
+            mfg::command::mfg_calculate,
+            mfg::command::mfg_bom,
+            mfg::command::mfg_rank,
+            mfg::command::mfg_locations,
+            mfg::command::mfg_npc_blueprints,
+            mfg::command::mfg_decryptors,
+            mfg::command::mfg_invention_plan,
+            mfg::command::mfg_research_info,
+            mfg::my_industry::mfg_sync_my_blueprints,
+            mfg::my_industry::mfg_sync_my_jobs,
+            mfg::my_industry::mfg_cost_index_sync,
+            mfg::my_industry::mfg_my_industry,
+            mfg::my_industry::mfg_character_skills,
             esi::sync_market_groups,
             esi::seed_market_groups,
             esi::get_type_group_names,
-            esi_industry::fetch_character_blueprints,
-            esi_industry::fetch_character_industry_jobs,
-            esi_industry::fetch_corporation_industry_jobs,
-            esi_industry::fetch_industry_systems,
-            esi_industry::fetch_market_prices,
-            esi_industry::fetch_character_skills,
             monitor::resolve_eve_log_dir,
             monitor::scan_chat_once,
             monitor::start_monitor,

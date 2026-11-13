@@ -56,6 +56,10 @@ futures = "0.3"
 
 # Windows 下直接调用 ShellExecuteW 打开授权页：
 # `open` crate 走 powershell/explorer 命令行，超长 URL 会被 explorer 分支判失败（ExitStatus(1)）
+# 测试里需要 #[tokio::test]，运行时依赖只需要 time feature
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

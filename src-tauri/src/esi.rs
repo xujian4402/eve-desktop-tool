@@ -505,70 +505,6 @@ async fn has_market_service(structure_id: i64, token: &str) -> bool {
     }
 }
 
-/// 制造类建筑（工程复合体）的 typeID：莱塔卢 / 阿兹贝尔 / 索迪约
-const MANUFACTURING_STRUCTURE_TYPES: [i64; 3] = [35825, 35826, 35827];
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManufacturingStructureView {
-    pub structure_id: i64,
-    pub name: String,
-    pub solar_system_id: Option<i64>,
-    pub solar_system_name: Option<String>,
-    pub type_id: i64,
-    pub owner_id: Option<i64>,
-}
-
-/// 获取角色可访问的「制造建筑」。
-///
-/// 复用五源发现（挂单 / 资产 / 合同 / 所在 / 军团），逐个解析类型，
-/// 只保留工程复合体（莱塔卢 / 阿兹贝尔 / 索迪约），供制造业建筑配置使用。
-#[tauri::command]
-pub async fn fetch_manufacturing_structures(
-    character_id: i64,
-    pool: tauri::State<'_, SqlitePool>,
-) -> Result<Vec<ManufacturingStructureView>, String> {
-    let token = ensure_token(pool.inner(), character_id).await?;
-    let corporation_id = character_corporation_id(pool.inner(), character_id).await;
-
-    let (found, _notes) = discover_structure_ids(character_id, corporation_id, &token).await;
-
-    let mut candidates: Vec<(i64, Vec<String>)> = found.into_iter().collect();
-    // 来源越多越可能是常用建筑，优先解析
-    candidates.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-    candidates.truncate(MAX_SCAN_STRUCTURES);
-
-    let mut result: Vec<ManufacturingStructureView> = Vec::new();
-
-    for (structure_id, _sources) in candidates {
-        let Ok(detail) = fetch_structure_detail(structure_id, &token).await else {
-            // 无权访问的建筑直接跳过：拿不到类型就无从判断是否可制造
-            continue;
-        };
-
-        let type_id = detail.type_id.unwrap_or(0);
-        if !MANUFACTURING_STRUCTURE_TYPES.contains(&type_id) {
-            continue;
-        }
-
-        let solar_system_name = match detail.solar_system_id {
-            Some(id) => resolve_name(id).await,
-            None => None,
-        };
-
-        result.push(ManufacturingStructureView {
-            structure_id,
-            name: detail.name,
-            solar_system_id: detail.solar_system_id,
-            solar_system_name,
-            type_id,
-            owner_id: detail.owner_id,
-        });
-    }
-
-    Ok(result)
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredStructure {
@@ -1971,4 +1907,44 @@ pub async fn fetch_region_best_sell(
     }
 
     Ok(result)
+}
+
+/// ESI 全服参考价（adjusted_price，缺失时回退 average_price）。
+///
+/// 制造业的 EIV（估算物品价值）用它计算安装费与税费；
+/// 只读公开接口，不需要授权。
+pub(crate) async fn fetch_market_prices() -> Result<std::collections::HashMap<String, f64>, String> {
+    let response = http()
+        .get(format!("{ESI_BASE}/markets/prices/"))
+        .query(&[("datasource", "tranquility")])
+        .send()
+        .await
+        .map_err(|e| format!("请求失败（{e}）"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status().as_u16()));
+    }
+
+    let rows: Vec<serde_json::Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("解析失败（{e}）"))?;
+
+    let mut map = std::collections::HashMap::new();
+
+    for row in rows {
+        let Some(type_id) = row["type_id"].as_i64() else {
+            continue;
+        };
+
+        let price = row["adjusted_price"]
+            .as_f64()
+            .or_else(|| row["average_price"].as_f64());
+
+        if let Some(price) = price {
+            map.insert(type_id.to_string(), price);
+        }
+    }
+
+    Ok(map)
 }
